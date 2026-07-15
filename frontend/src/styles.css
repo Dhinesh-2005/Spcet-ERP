@@ -1,0 +1,68 @@
+/* =========================
+   CLEAN WHITE CARD
+   ========================= */
+
+/* Main container */
+.glacier-card {
+  background: #ffffff;              /* Solid white */
+  border: 1px solid #e5e7eb;        /* Light gray border */
+  border-radius: 16px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.08);  /* Soft shadow */
+}
+
+/* Inner container */
+.glacier-inner {
+  background: #ffffff;
+  border: 1px solid #f1f5f9;
+  border-radius: 12px;
+}
+
+/* Tabs */
+.glacier-tab {
+  color: #6b7280;
+  font-weight: 500;
+}
+
+.glacier-tab-active {
+  background: #4f46e5;  /* Indigo */
+  color: #ffffff;
+  box-shadow: none;
+}
+
+/* Inputs */
+.glacier-input {
+  width: 100%;
+  padding: 12px;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #111827;
+  border: 1px solid #d1d5db;
+  outline: none;
+  transition: border 0.2s ease, box-shadow 0.2s ease;
+}
+
+.glacier-input::placeholder {
+  color: #9ca3af;
+}
+
+.glacier-input:focus {
+  border-color: #4f46e5;
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15);
+}
+
+/* Login button */
+.glacier-button {
+  width: 100%;
+  padding: 12px;
+  border-radius: 10px;
+  background: #4f46e5;   /* Solid color instead of gradient */
+  color: #ffffff;
+  font-weight: 600;
+  box-shadow: 0 6px 18px rgba(79, 70, 229, 0.25);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.glacier-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 22px rgba(79, 70, 229, 0.3);
+}
