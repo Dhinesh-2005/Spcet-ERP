@@ -4,7 +4,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+MONGO_URI = os.getenv("MONGO_URI")
+if not MONGO_URI:
+    raise ValueError("MONGO_URI environment variable is not set")
 MONGO_DB = os.getenv("MONGO_DB", "uniscore")
 
 client = AsyncIOMotorClient(MONGO_URI)
