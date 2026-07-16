@@ -1,8 +1,16 @@
 import os
+from pathlib import Path
 from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import load_dotenv
 
-load_dotenv()
+# Resolve the backend directory (parent of app directory) and load .env from it
+backend_dir = Path(__file__).resolve().parent.parent
+env_path = backend_dir / ".env"
+
+if env_path.exists():
+    load_dotenv(dotenv_path=env_path)
+else:
+    load_dotenv()
 
 MONGO_URI = os.getenv("MONGO_URI")
 if not MONGO_URI:
