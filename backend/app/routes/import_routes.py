@@ -74,40 +74,127 @@ def _get_numeric_value(cell: Any) -> float:
 
 @router.post("/subjects")
 async def upload_subjects(subjects: List[SubjectModel]):
+    imported = 0
+    skipped = []
+
     for subject in subjects:
+        # Normalise & validate mandatory fields
+        subject.subjectCode = subject.subjectCode.strip().upper()
+        subject.department  = (subject.department or "").strip().upper()
+
+        if not subject.subjectCode:
+            skipped.append("row: missing subjectCode"); continue
+        if not subject.department:
+            skipped.append(f"{subject.subjectCode}: missing department"); continue
+        if not subject.semester or subject.semester < 1:
+            skipped.append(f"{subject.subjectCode}: invalid semester ({subject.semester})"); continue
+
+        # Ensure credits is stored as a non-negative integer
+        subject.credits = max(0, int(subject.credits or 0))
+
         existing = await db.subjects.find_one({"subjectCode": subject.subjectCode, "department": subject.department})
         if existing:
             subject.id = str(existing.get("_id"))
+
         await db.subjects.update_one(
             {"subjectCode": subject.subjectCode, "department": subject.department},
             {"$set": subject.dict(exclude_none=True, exclude={"id"})},
             upsert=True,
         )
-    return {"message": "Subjects uploaded successfully", "count": len(subjects)}
+        imported += 1
+
+    return {
+        "message": f"Subjects uploaded: {imported} imported, {len(skipped)} skipped.",
+        "imported": imported,
+        "skipped": len(skipped),
+        "skippedDetails": skipped
+    }
 
 @router.post("/logins")
 async def upload_logins(users: List[Dict[str, Any]]):
+    students_in = 0
+    faculty_in  = 0
+    hods_in     = 0
+    skipped     = []
+
     for user in users:
-        role = str(user.get("role", "")).lower()
+        role  = str(user.get("role", "")).lower().strip()
+        reg   = str(user.get("registerNumber", "")).strip()
+        name  = str(user.get("name", "")).strip()
+        pwd   = str(user.get("password", "")).strip()
+        dept  = str(user.get("department", "")).strip().upper()
+        sem   = user.get("semester")
+        yr    = user.get("year")
+
+        if not reg:
+            skipped.append("row: missing registerNumber"); continue
+
         if role == "student":
+            if not dept:
+                skipped.append(f"{reg}: missing department"); continue
+            sem_int = int(sem) if sem else 0
+            yr_int  = int(yr)  if yr  else (int(sem_int / 2) if sem_int else None)
             await db.students.update_one(
-                {"registerNumber": user.get("registerNumber")},
-                {"$set": {"registerNumber": user.get("registerNumber"), "name": user.get("name"), "password": user.get("password"), "department": user.get("department"), "semester": user.get("semester"), "year": user.get("year") or (int(user.get("semester")/2) if user.get("semester") else None), "role": "student"}},
+                {"registerNumber": reg},
+                {"$set": {
+                    "registerNumber": reg,
+                    "name":           name,
+                    "password":       pwd,
+                    "department":     dept,
+                    "semester":       sem_int,
+                    "year":           yr_int,
+                    "role":           "student"
+                }},
                 upsert=True,
             )
+            students_in += 1
+
         elif role == "faculty":
             await db.faculties.update_one(
-                {"registerNumber": user.get("registerNumber")},
-                {"$set": {"registerNumber": user.get("registerNumber"), "name": user.get("name"), "password": user.get("password"), "department": user.get("department"), "role": "faculty"}},
+                {"registerNumber": reg},
+                {"$set": {
+                    "registerNumber": reg,
+                    "name":           name,
+                    "password":       pwd,
+                    "department":     dept,
+                    "role":           "faculty"
+                }},
                 upsert=True,
             )
+            faculty_in += 1
+
         elif role == "hod":
             await db.hods.update_one(
-                {"registerNumber": user.get("registerNumber")},
-                {"$set": {"registerNumber": user.get("registerNumber"), "name": user.get("name"), "password": user.get("password"), "department": user.get("department"), "role": "hod"}},
+                {"registerNumber": reg},
+                {"$set": {
+                    "registerNumber": reg,
+                    "name":           name,
+                    "password":       pwd,
+                    "department":     dept,
+                    "role":           "hod"
+                }},
                 upsert=True,
             )
-    return {"message": "Logins sorted and uploaded successfully", "count": len(users)}
+            hods_in += 1
+
+        else:
+            skipped.append(f"{reg}: unknown role '{role}'")
+
+    parts = []
+    if students_in: parts.append(f"{students_in} student(s)")
+    if faculty_in:  parts.append(f"{faculty_in} faculty")
+    if hods_in:     parts.append(f"{hods_in} HOD(s)")
+    msg = f"Uploaded: {', '.join(parts) or 'none'}"
+    if skipped: msg += f" | {len(skipped)} skipped"
+
+    return {
+        "message": msg,
+        "students": students_in,
+        "faculty":  faculty_in,
+        "hods":     hods_in,
+        "skipped":  len(skipped),
+        "skippedDetails": skipped
+    }
 
 @router.get("/logins")
 async def get_logins():
@@ -263,10 +350,41 @@ async def upload_internal_file(file: UploadFile = File(...), subjectCode: str = 
 
 @router.get("/fetch-subjects")
 async def fetch_subjects(department: str, semester: int, paperType: str = None):
-    query = {"department": department, "semester": semester}
+    query = {"department": {"$regex": f"^{department.strip()}$", "$options": "i"}, "semester": int(semester)}
     if paperType:
         query["paperType"] = paperType
     return [clean_doc(doc) async for doc in db.subjects.find(query)]
+
+@router.get("/all-subjects")
+async def get_all_subjects(
+    department: str = None,
+    semester: int = None,
+    subjectCode: str = None,
+    subjectName: str = None,
+):
+    """Return subjects with optional filters for the Setup module subject browser."""
+    query = {}
+    if department and department.upper() != "ALL":
+        query["department"] = {"$regex": f"^{department.strip()}$", "$options": "i"}
+    if semester and semester != 0:
+        query["semester"] = int(semester)
+    if subjectCode:
+        query["subjectCode"] = {"$regex": subjectCode.strip(), "$options": "i"}
+    if subjectName:
+        query["subjectName"] = {"$regex": subjectName.strip(), "$options": "i"}
+    docs = [clean_doc(doc) async for doc in db.subjects.find(query).sort([("department", 1), ("semester", 1), ("subjectCode", 1)])]
+    return docs
+
+@router.delete("/subjects/{subjectCode}")
+async def delete_subject(subjectCode: str, department: str):
+    """Delete a single subject by subjectCode + department."""
+    result = await db.subjects.delete_one({
+        "subjectCode": subjectCode.strip().upper(),
+        "department": department.strip().upper()
+    })
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail=f"Subject {subjectCode} not found for dept {department}")
+    return {"message": f"Subject {subjectCode} deleted successfully."}
 
 @router.post("/external")
 async def upload_external_marks(marks: List[ExternalMarksModel]):

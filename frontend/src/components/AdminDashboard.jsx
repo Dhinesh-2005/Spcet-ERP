@@ -137,6 +137,15 @@ export default function AdminDashboard({ onLogout }) {
   const [paperType, setPaperType] = useState(null); const [subjectList, setSubjectList] = useState([]); const [selectedSubject, setSelectedSubject] = useState(""); const [internalFile, setInternalFile] = useState(null);
   const [previewData, setPreviewData] = useState([]); const [loadingPreview, setLoadingPreview] = useState(false);
 
+  // --- SUBJECT BROWSER STATE (Setup tab) ---
+  const [sbDept, setSbDept]         = useState("ALL");
+  const [sbSem, setSbSem]           = useState(0);
+  const [sbCode, setSbCode]         = useState("");
+  const [sbName, setSbName]         = useState("");
+  const [sbList, setSbList]         = useState([]);
+  const [sbLoading, setSbLoading]   = useState(false);
+  const [sbDeleteId, setSbDeleteId] = useState(null); // subjectCode being confirmed for delete
+
   const apiPost = async (endpoint, body, isFile = false) => {
     setLoading(true); setMessage("");
     try {
@@ -149,8 +158,31 @@ export default function AdminDashboard({ onLogout }) {
       }
       const response = await fetch(`${API_BASE}${endpoint}`, options);
       const text = await response.text();
-      try { const json = JSON.parse(text); if (json.message) setMessage(`✅ Success: ${json.message}`); else if (!response.ok) throw new Error(json.message || text); else setMessage(`✅ Success: Action Completed`); } 
-      catch { if (!response.ok) throw new Error(text); setMessage(`✅ Success: ${text}`); } return true; 
+      try {
+        const json = JSON.parse(text);
+        if (!response.ok) throw new Error(json.message || json.detail || text);
+        let msg = json.message || "Action Completed";
+        // Subject upload summary
+        if (json.imported !== undefined) {
+          msg = `✅ ${json.imported} subject(s) saved`;
+          if (json.skipped > 0) msg += `, ${json.skipped} skipped: ${(json.skippedDetails || []).join(" | ")}`;
+        // Login/student upload summary
+        } else if (json.students !== undefined || json.faculty !== undefined) {
+          const parts = [];
+          if (json.students) parts.push(`${json.students} student(s)`);
+          if (json.faculty)  parts.push(`${json.faculty} faculty`);
+          if (json.hods)     parts.push(`${json.hods} HOD(s)`);
+          msg = `✅ Uploaded: ${parts.join(", ") || "none"}`;
+          if (json.skipped > 0) msg += ` | ${json.skipped} skipped`;
+        } else {
+          msg = `✅ ${msg}`;
+        }
+        setMessage(msg);
+      } catch (parseErr) {
+        if (!response.ok) throw new Error(text);
+        setMessage(`✅ ${text}`);
+      }
+      return true;
     } catch (err) { setMessage(`❌ Error: ${err.message}`); return false; } finally { setLoading(false); }
   };
 
@@ -188,45 +220,170 @@ export default function AdminDashboard({ onLogout }) {
     }
   };
 
+  // --- SUBJECT BROWSER HANDLERS ---
+  const fetchAllSubjects = async () => {
+    setSbLoading(true);
+    const params = new URLSearchParams();
+    if (sbDept !== "ALL") params.append("department", sbDept);
+    if (sbSem && sbSem !== 0)  params.append("semester", sbSem);
+    if (sbCode.trim())         params.append("subjectCode", sbCode.trim());
+    if (sbName.trim())         params.append("subjectName", sbName.trim());
+    try {
+      const res = await fetch(`${API_BASE}/api/import/all-subjects?${params}`);
+      const data = res.ok ? await res.json() : [];
+      setSbList(Array.isArray(data) ? data : []);
+      if (!res.ok || (Array.isArray(data) && data.length === 0))
+        setMessage("⚠️ No subjects found for the selected filters.");
+      else
+        setMessage("");
+    } catch { setMessage("❌ Failed to fetch subjects."); }
+    setSbLoading(false);
+  };
+
+  const deleteSubject = async (subjectCode, department) => {
+    setSbDeleteId(null);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/import/subjects/${subjectCode}?department=${encodeURIComponent(department)}`,
+        { method: "DELETE" }
+      );
+      const data = await res.json();
+      if (res.ok) {
+        setMessage(`🗑️ ${data.message}`);
+        setSbList(prev => prev.filter(s => !(s.subjectCode === subjectCode && s.department === department)));
+      } else {
+        setMessage(`❌ ${data.detail || "Delete failed"}`);
+      }
+    } catch { setMessage("❌ Network error during delete."); }
+  };
+
   const handleSubjectUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    const currentDept = deptRef.current;
     readFirstSheet(file, (rows) => {
-      const mapped = rows.map((r) => {
+      const valid = [];
+      const skipped = [];
+
+      rows.forEach((r) => {
+        // normalizeRowKeys strips spaces & lowercases keys:
+        // "Subject Code" → "subjectcode", "Subject Name" → "subjectname",
+        // "Department" → "department", "Semester" → "semester",
+        // "Credits" → "credits", "Paper Type" → "papertype"
         const n = normalizeRowKeys(r);
+
+        const subjectCode = String(n.subjectcode || n.code || n.subcode || "").toUpperCase().trim();
+        const subjectName = String(n.subjectname || n.name || n.subname || "").trim();
+        const department  = String(n.department || n.dept || "").toUpperCase().trim();
+        const semester    = parseInt(n.semester || n.sem || "0", 10);
+        const credits     = parseInt(n.credits || n.credit || n.c || "0", 10);
+
+        // Determine paper type — column "Paper Type" → normalized "papertype"
         let paperType = "THEORY";
-        const pt = String(n.papertype || n.type || "").toUpperCase().trim();
+        const pt = String(n.papertype || n.type || n.paper || "").toUpperCase().trim();
         if (["THEORY", "PRACTICAL", "INTEGRATED"].includes(pt)) {
           paperType = pt;
         } else {
+          // fallback: infer from L/T/P columns if present
           const lVal = parseInt(n.l) || 0;
-          const tVal = parseInt(n.t) || 0;
           const pVal = parseInt(n.p) || 0;
-          if (pVal > 0 && lVal > 0) {
-            paperType = "INTEGRATED";
-          } else if (pVal > 0 && lVal === 0) {
-            paperType = "PRACTICAL";
-          } else {
-            paperType = "THEORY";
-          }
+          if (pVal > 0 && lVal > 0)      paperType = "INTEGRATED";
+          else if (pVal > 0 && lVal === 0) paperType = "PRACTICAL";
+          else                             paperType = "THEORY";
         }
-        return {
-          subjectCode: String(n.subjectcode || n.code || "").toUpperCase().trim(),
-          subjectName: n.subjectname || n.name || "",
-          department: currentDept,
-          semester: parseInt(sem),
+
+        // Skip rows missing mandatory fields
+        if (!subjectCode) { skipped.push(`Row missing Subject Code`); return; }
+        if (!department)  { skipped.push(`${subjectCode}: missing Department`); return; }
+        if (!semester || semester < 1 || semester > 99) {
+          skipped.push(`${subjectCode}: invalid Semester "${n.semester}"`); return;
+        }
+
+        valid.push({
+          subjectCode,
+          subjectName,
+          department,
+          semester,        // integer: 1–8 (or 99 for graduated)
+          credits,         // stored as-is for GPA/credit calculations
           l: parseInt(n.l) || 0,
           t: parseInt(n.t) || 0,
           p: parseInt(n.p) || 0,
-          credits: parseInt(n.credits || n.c) || 0,
-          paperType: paperType
-        };
-      }).filter(item => item.subjectCode);
-      apiPost("/api/import/subjects", mapped);
+          paperType
+        });
+      });
+
+      if (valid.length === 0) {
+        setMessage(`⚠️ No valid subjects found. ${skipped.length > 0 ? skipped.join("; ") : "Check column headers: Subject Code, Subject Name, Department, Semester, Credits, Paper Type"}`);
+        return;
+      }
+
+      setMessage(`📤 Uploading ${valid.length} subject(s)${skipped.length > 0 ? ` (${skipped.length} skipped: ${skipped.join("; ")})` : ""}...`);
+      apiPost("/api/import/subjects", valid);
     });
   };
-  const handleLoginUpload = (e) => { const file = e.target.files[0]; if (!file) return; readFirstSheet(file, (rows) => { const mapped = rows.map((r) => { const n = normalizeRowKeys(r); let rawPassword = ""; for (let k in n) { if (k.includes("dob") || k.includes("birth") || k.includes("pass")) { rawPassword = String(n[k]).trim(); break; } } let formattedPassword = rawPassword; if (/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}$/.test(rawPassword)) { const parts = rawPassword.split(/[\/\-]/); formattedPassword = `${parts[0].padStart(2, '0')}-${parts[1].padStart(2, '0')}-${parts[2]}`; } else if (/^\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}$/.test(rawPassword)) { const parts = rawPassword.split(/[\/\-]/); formattedPassword = `${parts[2].padStart(2, '0')}-${parts[1].padStart(2, '0')}-${parts[0]}`; } else if (!isNaN(rawPassword) && Number(rawPassword) > 20000) { const dateObj = new Date((Number(rawPassword) - 25569) * 86400 * 1000); const y = dateObj.getFullYear(); const m = String(dateObj.getMonth() + 1).padStart(2, '0'); const d = String(dateObj.getDate()).padStart(2, '0'); formattedPassword = `${d}-${m}-${y}`; } return { registerNumber: n.registerNumber, name: n.name, password: formattedPassword, department: n.department || "", semester: n.semester ? parseInt(n.semester) : parseInt(sem), role: uploadRole }; }); const validRows = mapped.filter(m => m.registerNumber); if(validRows.length === 0) { setMessage("⚠️ No valid Register Numbers found."); return; } apiPost("/api/import/logins", validRows); }); };
+  const handleLoginUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    readFirstSheet(file, (rows) => {
+      const valid   = [];
+      const skipped = [];
+
+      rows.forEach((r, idx) => {
+        // normalizeRowKeys maps:
+        //  "Register Number" -> registerNumber  (via roll/reg detection)
+        //  "Name"            -> name
+        //  "DOB"             -> dob
+        //  "Department"      -> department
+        //  "Semester"        -> semester
+        //  "Year"            -> year
+        //  "Role"            -> role
+        const n = normalizeRowKeys(r);
+
+        const registerNumber = (n.registerNumber || n.registernumber || "").trim();
+        const name           = (n.name || "").trim();
+        const rawDob         = String(n.dob || n.dateofbirth || n.birthdate || "").trim();
+        const rawPassword    = String(n.password || n.pass || "").trim();
+        const department     = String(n.department || n.dept || "").toUpperCase().trim();
+        const semester       = parseInt(n.semester || n.sem || "0", 10);
+        const year           = parseInt(n.year || "0", 10) || null;
+        // Role: prefer file column, fallback to UI selector
+        const roleRaw = String(n.role || uploadRole || "student").toLowerCase().trim();
+        const role    = ["student", "faculty", "hod"].includes(roleRaw) ? roleRaw : "student";
+
+        // Determine password: use explicit Password if provided, otherwise parse DOB (DD-MM-YYYY)
+        let password = rawPassword || rawDob;
+        if (!rawPassword && rawDob) {
+          if (/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}$/.test(rawDob)) {
+            const p = rawDob.split(/[\/\-]/);
+            password = `${p[0].padStart(2,"0")}-${p[1].padStart(2,"0")}-${p[2]}`;
+          } else if (/^\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}$/.test(rawDob)) {
+            const p = rawDob.split(/[\/\-]/);
+            password = `${p[2].padStart(2,"0")}-${p[1].padStart(2,"0")}-${p[0]}`;
+          } else if (!isNaN(rawDob) && Number(rawDob) > 20000) {
+            const d = new Date((Number(rawDob) - 25569) * 86400 * 1000);
+            password = `${String(d.getDate()).padStart(2,"0")}-${String(d.getMonth()+1).padStart(2,"0")}-${d.getFullYear()}`;
+          }
+        }
+
+        // Validate mandatory fields
+        if (!registerNumber) { skipped.push(`Row ${idx+2}: missing Register Number`); return; }
+        if (!department && (role === "student" || role === "faculty" || role === "hod")) { skipped.push(`${registerNumber}: missing Department`); return; }
+        if (!semester && role === "student")   { skipped.push(`${registerNumber}: missing Semester`);   return; }
+
+        valid.push({ registerNumber, name, password, department, semester, year, role });
+      });
+
+      if (valid.length === 0) {
+        setMessage(`\u26a0\ufe0f No valid rows found. ${skipped.length > 0 ? skipped.join("; ") : "Check columns: Register Number, Name, DOB, Department, Semester, Year, Role"}`);
+        return;
+      }
+
+      const byRole = valid.reduce((a, v) => { a[v.role] = (a[v.role]||0)+1; return a; }, {});
+      const summary = Object.entries(byRole).map(([r,c]) => `${c} ${r}(s)`).join(", ");
+      setMessage(`\ud83d\udce4 Uploading: ${summary}${skipped.length > 0 ? ` | ${skipped.length} skipped` : ""}...`);
+      apiPost("/api/import/logins", valid);
+    });
+  };
   const fetchSubjects = async (type) => { setPaperType(type); setSubjectList([]); setSelectedSubject(""); setMessage(`Fetching ${type} subjects...`); try { const res = await fetch(`${API_BASE}/api/import/fetch-subjects?department=${dept}&semester=${sem}&paperType=${type}`); if (!res.ok) throw new Error("Failed to fetch subjects"); const data = await res.json(); setSubjectList(data); if (data.length === 0) { setMessage(`⚠️ No ${type} subjects found.`); } else { setMessage(""); setSelectedSubject(data[0].subjectCode); } } catch (err) { setMessage(`❌ Error: ${err.message}`); } };
   const handleInternalUpload = () => { if (!internalFile || !selectedSubject) { setMessage("⚠️ Select a subject and file first."); return; } const formData = new FormData(); formData.append("file", internalFile); formData.append("subjectCode", selectedSubject); formData.append("department", dept); apiPost("/api/import/internal-upload", formData, true); };
   const handleExternalUpload = (e) => {
@@ -998,15 +1155,153 @@ export default function AdminDashboard({ onLogout }) {
         {/* Other Tabs (Setup, Excel, Grid, Process, Manual, Manage) */}
         {activeTab === "setup" && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6"> 
-            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex gap-4 items-end">
-              <div className="flex-1"><label className="block text-xs font-bold text-gray-500 uppercase mb-2">Target Department</label><select value={dept} onChange={(e) => setDept(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md outline-none">{DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}</select></div>
-              <div className="flex-1"><label className="block text-xs font-bold text-gray-500 uppercase mb-2">Target Semester</label><select value={sem} onChange={(e) => setSem(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md outline-none">{[1, 2, 3, 4, 5, 6, 7, 8, 99].map((n) => <option key={n} value={n}>{n === 99 ? "Graduated 🎓" : `Semester ${n}`}</option>)}</select></div>
-            </div>
+
+            {/* Upload cards */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100"><h3 className="font-bold text-lg mb-2 text-gray-700">1. Upload Subjects</h3><input type="file" onChange={handleSubjectUpload} accept=".xlsx, .csv" className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:bg-indigo-50 file:text-indigo-700" /></div>
-              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100"><h3 className="font-bold text-lg text-gray-700">2. Upload Logins</h3><div className="mb-2"><select value={uploadRole} onChange={(e) => setUploadRole(e.target.value)} className="text-xs border border-gray-300 rounded px-2 py-1"><option value="student">Role: STUDENT</option><option value="hod">Role: HOD</option><option value="faculty">Role: FACULTY</option></select></div><input type="file" onChange={handleLoginUpload} accept=".xlsx, .csv" className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:bg-indigo-50 file:text-indigo-700" /></div>
-              <div className="bg-indigo-50 p-6 rounded-xl shadow-sm border border-indigo-100 col-span-1 md:col-span-2"><h3 className="font-bold text-lg mb-2 text-indigo-800">🎓 Semester Promotion Engine</h3><p className="text-sm text-indigo-600 mb-4">Automatically move all students up one semester. Semester 8 students will be marked as <b>Graduated</b>.</p><button onClick={() => handlePromote(dept, sem)} disabled={loading || Number(sem) === 99} className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-lg shadow-md transition-all active:scale-95 flex items-center gap-2 disabled:bg-gray-400"><span>📈</span> Run Promotion for {dept} Sem {sem}</button></div>
+              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                <h3 className="font-bold text-lg mb-1 text-gray-700">1. Upload Subjects</h3>
+                <p className="text-xs text-gray-500 mb-3">Department &amp; Semester are automatically detected from each row in the Excel file (e.g. <code className="bg-gray-100 px-1 py-0.5 rounded text-indigo-600 font-mono">subjects.xlsx</code> format).</p>
+                <p className="text-xs text-slate-400 mb-3 font-mono">Columns: Subject Code | Subject Name | Department | Semester | Credits | Paper Type</p>
+                <input type="file" onChange={handleSubjectUpload} accept=".xlsx, .csv" className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer" />
+              </div>
+              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                <h3 className="font-bold text-lg text-gray-700 mb-1">2. Upload Students / Logins</h3>
+                <p className="text-xs text-gray-500 mb-1">Upload student, HOD, or faculty credentials from Excel.</p>
+                <p className="text-xs text-slate-400 mb-3 font-mono">Columns: Register Number | Name | DOB | Department | Semester | Year | Role</p>
+                <p className="text-xs text-gray-400 mb-2">Password = DOB (DD-MM-YYYY). Role column in file takes priority over selector below.</p>
+                <div className="mb-2">
+                  <label className="text-xs font-bold text-gray-500 mr-2">Fallback Role:</label>
+                  <select value={uploadRole} onChange={(e) => setUploadRole(e.target.value)} className="text-xs border border-gray-300 rounded px-2 py-1">
+                    <option value="student">STUDENT</option>
+                    <option value="hod">HOD</option>
+                    <option value="faculty">FACULTY</option>
+                  </select>
+                </div>
+                <input type="file" onChange={handleLoginUpload} accept=".xlsx, .csv" className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer" />
+              </div>
+              <div className="bg-indigo-50 p-6 rounded-xl shadow-sm border border-indigo-100 col-span-1 md:col-span-2">
+                <h3 className="font-bold text-lg mb-2 text-indigo-800">🎓 Semester Promotion Engine</h3>
+                <p className="text-sm text-indigo-600 mb-4">Automatically move all students up one semester. Semester 8 students will be marked as <b>Graduated</b>.</p>
+                <div className="flex flex-wrap gap-4 items-center mb-4">
+                  <div>
+                    <label className="block text-xs font-bold text-indigo-700 uppercase mb-1">Department</label>
+                    <select value={dept} onChange={(e) => setDept(e.target.value)} className="p-2 border border-indigo-200 rounded-md outline-none bg-white text-sm font-semibold text-gray-700">
+                      {DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-indigo-700 uppercase mb-1">Semester</label>
+                    <select value={sem} onChange={(e) => setSem(e.target.value)} className="p-2 border border-indigo-200 rounded-md outline-none bg-white text-sm font-semibold text-gray-700">
+                      {[1, 2, 3, 4, 5, 6, 7, 8, 99].map((n) => <option key={n} value={n}>{n === 99 ? "Graduated 🎓" : `Semester ${n}`}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <button onClick={() => handlePromote(dept, sem)} disabled={loading || Number(sem) === 99} className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-lg shadow-md transition-all active:scale-95 flex items-center gap-2 disabled:bg-gray-400"><span>📈</span> Run Promotion for {dept} Sem {sem}</button>
+              </div>
             </div>
+
+            {/* ─── SUBJECT BROWSER ─── */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+              <div className="bg-gradient-to-r from-slate-700 to-slate-800 px-6 py-4 flex items-center justify-between">
+                <div>
+                  <h3 className="font-bold text-white text-lg">📚 Subject Browser</h3>
+                  <p className="text-slate-400 text-xs mt-0.5">View, filter, and remove subjects stored in the database</p>
+                </div>
+                <span className="bg-slate-600 text-slate-200 text-xs font-bold px-3 py-1 rounded-full">{sbList.length} subject{sbList.length !== 1 ? "s" : ""}</span>
+              </div>
+
+              {/* Filter bar */}
+              <div className="p-5 border-b border-gray-100 bg-slate-50">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Department</label>
+                    <select value={sbDept} onChange={e => setSbDept(e.target.value)} className="w-full p-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-400 bg-white">
+                      <option value="ALL">All Departments</option>
+                      {DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Semester</label>
+                    <select value={sbSem} onChange={e => setSbSem(parseInt(e.target.value))} className="w-full p-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-400 bg-white">
+                      <option value={0}>All Semesters</option>
+                      {[1,2,3,4,5,6,7,8].map(n => <option key={n} value={n}>Semester {n}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Subject Code</label>
+                    <input value={sbCode} onChange={e => setSbCode(e.target.value.toUpperCase())} onKeyDown={e => e.key === "Enter" && fetchAllSubjects()} placeholder="e.g. CS3501" className="w-full p-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-400" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Subject Name</label>
+                    <input value={sbName} onChange={e => setSbName(e.target.value)} onKeyDown={e => e.key === "Enter" && fetchAllSubjects()} placeholder="e.g. Compiler Design" className="w-full p-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-400" />
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={fetchAllSubjects} disabled={sbLoading} className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white font-bold px-5 py-2 rounded-lg text-sm transition-all active:scale-95 flex items-center gap-2">
+                    {sbLoading ? <span className="animate-spin">⏳</span> : "🔍"} {sbLoading ? "Searching..." : "Search Subjects"}
+                  </button>
+                  <button onClick={() => { setSbDept("ALL"); setSbSem(0); setSbCode(""); setSbName(""); setSbList([]); setMessage(""); }} className="bg-gray-100 hover:bg-gray-200 text-gray-600 font-semibold px-4 py-2 rounded-lg text-sm transition-all">
+                    ✕ Clear
+                  </button>
+                </div>
+              </div>
+
+              {/* Results table */}
+              {sbList.length > 0 && (
+                <div className="overflow-x-auto max-h-[480px] overflow-y-auto">
+                  <table className="w-full text-sm text-left border-collapse">
+                    <thead className="bg-slate-100 text-slate-600 uppercase text-xs font-bold sticky top-0 shadow-sm z-10">
+                      <tr>
+                        <th className="px-4 py-3">Subject Code</th>
+                        <th className="px-4 py-3">Subject Name</th>
+                        <th className="px-4 py-3 text-center">Dept</th>
+                        <th className="px-4 py-3 text-center">Sem</th>
+                        <th className="px-4 py-3 text-center">Credits</th>
+                        <th className="px-4 py-3 text-center">Type</th>
+                        <th className="px-4 py-3 text-center w-24">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sbList.map((s, i) => (
+                        <tr key={`${s.subjectCode}-${s.department}-${i}`} className={`border-t border-gray-100 ${i % 2 === 0 ? "bg-white" : "bg-slate-50"} hover:bg-indigo-50 transition-colors`}>
+                          <td className="px-4 py-3 font-bold text-indigo-700 font-mono">{s.subjectCode}</td>
+                          <td className="px-4 py-3 text-gray-800">{s.subjectName}</td>
+                          <td className="px-4 py-3 text-center">
+                            <span className="bg-blue-100 text-blue-800 text-xs font-bold px-2 py-0.5 rounded">{s.department}</span>
+                          </td>
+                          <td className="px-4 py-3 text-center font-semibold text-gray-700">Sem {s.semester}</td>
+                          <td className="px-4 py-3 text-center font-bold text-gray-700">{s.credits}</td>
+                          <td className="px-4 py-3 text-center">
+                            <span className={`text-xs font-bold px-2 py-0.5 rounded ${s.paperType === "THEORY" ? "bg-green-100 text-green-700" : s.paperType === "PRACTICAL" ? "bg-purple-100 text-purple-700" : "bg-orange-100 text-orange-700"}`}>
+                              {s.paperType}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            {sbDeleteId === s.subjectCode + s.department ? (
+                              <div className="flex items-center gap-1 justify-center">
+                                <button onClick={() => deleteSubject(s.subjectCode, s.department)} className="bg-red-600 hover:bg-red-700 text-white text-xs font-bold px-2 py-1 rounded transition-all">Yes</button>
+                                <button onClick={() => setSbDeleteId(null)} className="bg-gray-200 hover:bg-gray-300 text-gray-700 text-xs font-bold px-2 py-1 rounded transition-all">No</button>
+                              </div>
+                            ) : (
+                              <button onClick={() => setSbDeleteId(s.subjectCode + s.department)} title="Remove subject" className="text-red-400 hover:text-red-600 hover:bg-red-50 p-1.5 rounded transition-all">
+                                🗑️
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {sbList.length === 0 && !sbLoading && (
+                <div className="py-12 text-center text-gray-400 text-sm">
+                  <div className="text-4xl mb-3">📭</div>
+                  Use the filters above and click <b className="text-indigo-600">Search Subjects</b> to view stored subjects.
+                </div>
+              )}
+            </div>
+
           </motion.div>
         )}
         
