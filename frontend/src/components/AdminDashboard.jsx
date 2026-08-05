@@ -88,6 +88,14 @@ export default function AdminDashboard({ onLogout }) {
   const [profileSemFilter, setProfileSemFilter] = useState("All");
   const [profileRoleFilter, setProfileRoleFilter] = useState("student");
 
+  // STUDENT SUBJECT DRAWER STATE (new – additive only, does not affect profile state above)
+  const [subjectDrawerOpen, setSubjectDrawerOpen] = useState(false);
+  const [subjectDrawerStudent, setSubjectDrawerStudent] = useState(null); // { registerNumber, name }
+  const [subjectDrawerData, setSubjectDrawerData] = useState(null);       // API response
+  const [subjectDrawerLoading, setSubjectDrawerLoading] = useState(false);
+  const [subjectDrawerError, setSubjectDrawerError] = useState("");
+
+
   // PASSWORD CHANGE STATE
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -134,6 +142,29 @@ export default function AdminDashboard({ onLogout }) {
      } catch(e) { console.warn(e); }
   };
 
+  // NEW: Open right-side drawer and fetch subjects for a student (additive only)
+  const openStudentSubjectDrawer = async (student) => {
+    setSubjectDrawerStudent(student);
+    setSubjectDrawerOpen(true);
+    setSubjectDrawerData(null);
+    setSubjectDrawerError("");
+    setSubjectDrawerLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/students/${student.registerNumber}/subjects`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Failed to load subjects");
+      }
+      const data = await res.json();
+      setSubjectDrawerData(data);
+    } catch (e) {
+      setSubjectDrawerError(e.message || "Network error. Please try again.");
+    } finally {
+      setSubjectDrawerLoading(false);
+    }
+  };
+
+
   const [paperType, setPaperType] = useState(null); const [subjectList, setSubjectList] = useState([]); const [selectedSubject, setSelectedSubject] = useState(""); const [internalFile, setInternalFile] = useState(null);
   const [previewData, setPreviewData] = useState([]); const [loadingPreview, setLoadingPreview] = useState(false);
 
@@ -166,6 +197,13 @@ export default function AdminDashboard({ onLogout }) {
         if (json.imported !== undefined) {
           msg = `✅ ${json.imported} subject(s) saved`;
           if (json.skipped > 0) msg += `, ${json.skipped} skipped: ${(json.skippedDetails || []).join(" | ")}`;
+        // Other subjects upload summary
+        } else if (json.successfulAssignments !== undefined) {
+          msg = `✅ Processed ${json.totalProcessed} record(s): ${json.successfulAssignments} assignment(s) created.`;
+          if (json.duplicateSkipped > 0) msg += ` | ${json.duplicateSkipped} duplicate(s) skipped.`;
+          if (json.invalidRollNumbers && json.invalidRollNumbers.length > 0) msg += ` | Invalid Roll Nos: ${json.invalidRollNumbers.join(", ")}`;
+          if (json.invalidSubjectCodes && json.invalidSubjectCodes.length > 0) msg += ` | Invalid Subject Codes: ${json.invalidSubjectCodes.join(", ")}`;
+          if (json.validationErrors && json.validationErrors.length > 0) msg += ` | Validation Errors: ${json.validationErrors.join(" | ")}`;
         // Login/student upload summary
         } else if (json.students !== undefined || json.faculty !== undefined) {
           const parts = [];
@@ -320,6 +358,47 @@ export default function AdminDashboard({ onLogout }) {
       apiPost("/api/import/subjects", valid);
     });
   };
+
+  const handleOtherSubjectUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    readFirstSheet(file, (rows) => {
+      const valid = [];
+      const skipped = [];
+
+      rows.forEach((r, idx) => {
+        const n = normalizeRowKeys(r);
+
+        const subjectCode     = String(n.subjectcode || n.code || n.subcode || "").toUpperCase().trim();
+        const subjectName     = String(n.subjectname || n.name || n.subname || "").trim();
+        const subjectSemester = parseInt(n.subjectsemester || n.semester || n.sem || "0", 10);
+        const credits         = parseInt(n.credits || n.credit || "0", 10) || 0;
+        const category        = String(n.category || n.cat || "OTHER").toUpperCase().trim();
+        const rollNumbers     = String(n.registerNumber || n.registernumber || n.rollnumbers || n.rollnumber || n.rollno || n.registernumbers || n.regnos || "").trim();
+
+        if (!subjectCode) { skipped.push(`Row ${idx+2}: missing Subject Code`); return; }
+        if (!rollNumbers) { skipped.push(`Row ${idx+2} (${subjectCode}): missing Roll Numbers`); return; }
+
+        valid.push({
+          subjectCode,
+          subjectName,
+          subjectSemester,
+          credits,
+          category,
+          rollNumbers
+        });
+      });
+
+      if (valid.length === 0) {
+        setMessage(`⚠️ No valid rows found. ${skipped.length > 0 ? skipped.join("; ") : "Check columns: Subject Code, Subject Name, Subject Semester, Category, Roll Numbers"}`);
+        return;
+      }
+
+      setMessage(`📤 Processing ${valid.length} row(s) for Other Subjects upload...`);
+      apiPost("/api/import/other-subjects", valid);
+    });
+  };
+
   const handleLoginUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -490,7 +569,7 @@ export default function AdminDashboard({ onLogout }) {
       const validData = Array.isArray(data) ? data : [];
       
       const targetYear = Math.ceil(Number(sem) / 2);
-      const filtered = validData.filter(u => {
+      let filtered = validData.filter(u => {
         const dbDept = String(u.department || "").trim().toUpperCase();
         const uiDept = String(dept).trim().toUpperCase();
         if (dbDept !== uiDept) return false;
@@ -498,6 +577,18 @@ export default function AdminDashboard({ onLogout }) {
         const studentYear = Number(u.year) || Math.ceil(Number(u.semester) / 2);
         return studentYear === targetYear;
       });
+      
+      if (gridSubject.trim()) {
+        try {
+          const mapRes = await fetch(`${API_BASE}/api/import/student-subjects?subjectCode=${gridSubject.trim()}`);
+          if (mapRes.ok) {
+            const mappedSubjects = await mapRes.json();
+            const mappedRegs = new Set((mappedSubjects || []).map(m => m.registerNumber));
+            const extraStudents = validData.filter(u => mappedRegs.has(u.registerNumber) && !filtered.some(f => f.registerNumber === u.registerNumber));
+            filtered = [...filtered, ...extraStudents];
+          }
+        } catch (e) { console.warn("Could not fetch student-subjects", e); }
+      }
       
       setGridData(filtered.map(s => {
         const base = { registerNumber: s.registerNumber, name: s.name, extMarks: "" };
@@ -602,7 +693,28 @@ export default function AdminDashboard({ onLogout }) {
                  }
              } catch(e) { console.warn(`Could not fetch profile for ${s.registerNumber}`); }
 
-             tickets.push({ student: s, currentSubjects: currentSemSubjects, arrears: arrears });
+             let studentSpecificSubs = [];
+             try {
+                 const mapRes = await fetch(`${API_BASE}/api/import/student-subjects?registerNumber=${s.registerNumber}`);
+                 if (mapRes.ok) {
+                     studentSpecificSubs = await mapRes.json();
+                 }
+             } catch (e) {}
+
+             let studentSubjectsList = [...currentSemSubjects];
+             (studentSpecificSubs || []).forEach(sub => {
+                 if (sub.category === "ARREAR") {
+                     if (!arrears.some(a => (a.subjectCode || a.subject) === sub.subjectCode)) {
+                         arrears.push({ semester: sub.subjectSemester || 1, subjectCode: sub.subjectCode, subject: sub.subjectCode, title: sub.subjectName || sub.subjectCode });
+                     }
+                 } else {
+                     if (!studentSubjectsList.some(c => c.subjectCode === sub.subjectCode)) {
+                         studentSubjectsList.push({ subjectCode: sub.subjectCode, subjectName: sub.subjectName || sub.subjectCode, semester: sub.subjectSemester || htSem });
+                     }
+                 }
+             });
+
+             tickets.push({ student: s, currentSubjects: studentSubjectsList, arrears: arrears });
          }
 
          setGeneratedTickets(tickets);
@@ -914,8 +1026,8 @@ export default function AdminDashboard({ onLogout }) {
                                           </td>
                                        </tr>
                                        {grouped[sem].map(student => (
-                                         <tr key={student.registerNumber} className="hover:bg-gray-50 items-center">
-                                            <td className="px-4 py-2 flex justify-center">
+                                         <tr key={student.registerNumber} className="hover:bg-indigo-50/40 items-center cursor-pointer transition-colors" onClick={() => openStudentSubjectDrawer(student)}>
+                                            <td className="px-4 py-2 flex justify-center" onClick={e => e.stopPropagation()}>
                                                <div className="w-12 h-14 bg-gray-200 border border-gray-300 rounded overflow-hidden relative flex items-center justify-center">
                                                   <img 
                                                     src={`${API_BASE}/api/students/${student.registerNumber}/photo?t=${student.photoUpdateTs || ''}`} 
@@ -931,16 +1043,24 @@ export default function AdminDashboard({ onLogout }) {
                                             <td className="px-4 py-3 text-gray-600">{student.department}</td>
                                             <td className="px-4 py-3 text-gray-600">{student.semester}</td>
                                             <td className="px-4 py-3 font-mono font-bold text-gray-700">{student.password}</td>
-                                            <td className="px-4 py-3">
-                                               <label className="bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 font-bold py-1.5 px-3 rounded text-xs cursor-pointer inline-block transition-colors">
-                                                  Upload Photo
-                                                  <input 
-                                                     type="file" 
-                                                     accept="image/*" 
-                                                     className="hidden" 
-                                                     onChange={(e) => handlePhotoUpload(student.registerNumber, e)}
-                                                  />
-                                               </label>
+                                            <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                                                <div className="flex gap-2 items-center">
+                                                  <label className="bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 font-bold py-1.5 px-3 rounded text-xs cursor-pointer inline-block transition-colors">
+                                                     Upload Photo
+                                                     <input 
+                                                        type="file" 
+                                                        accept="image/*" 
+                                                        className="hidden" 
+                                                        onChange={(e) => handlePhotoUpload(student.registerNumber, e)}
+                                                     />
+                                                  </label>
+                                                  <button
+                                                    onClick={(e) => { e.stopPropagation(); openStudentSubjectDrawer(student); }}
+                                                    className="bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100 font-bold py-1.5 px-3 rounded text-xs cursor-pointer transition-colors whitespace-nowrap"
+                                                  >
+                                                    📚 Subjects
+                                                  </button>
+                                                </div>
                                             </td>
                                          </tr>
                                        ))}
@@ -968,11 +1088,132 @@ export default function AdminDashboard({ onLogout }) {
                     </table>
                  </div>
               </div>
-           </motion.div>
-        )}
 
-        {/* SUBJECTS VIEW */}
-        {activeTab === "subjects" && (
+         {/* ─── STUDENT SUBJECT DRAWER (NEW – additive overlay, zero effect on rest of UI) ─── */}
+         <AnimatePresence>
+           {subjectDrawerOpen && (
+             <>
+               {/* Backdrop */}
+               <motion.div
+                 key="drawer-backdrop"
+                 initial={{ opacity: 0 }}
+                 animate={{ opacity: 1 }}
+                 exit={{ opacity: 0 }}
+                 className="fixed inset-0 bg-black/40 z-40"
+                 onClick={() => setSubjectDrawerOpen(false)}
+               />
+               {/* Drawer Panel */}
+               <motion.div
+                 key="drawer-panel"
+                 initial={{ x: "100%" }}
+                 animate={{ x: 0 }}
+                 exit={{ x: "100%" }}
+                 transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                 className="fixed top-0 right-0 h-full w-full max-w-2xl bg-white shadow-2xl z-50 flex flex-col"
+               >
+                 {/* Drawer Header */}
+                 <div className="flex items-start justify-between px-6 py-5 border-b border-gray-200 bg-gradient-to-r from-indigo-600 to-blue-600 text-white flex-shrink-0">
+                   <div>
+                     <h2 className="text-lg font-bold leading-tight">📚 Subject Details</h2>
+                     {subjectDrawerStudent && (
+                       <p className="text-sm mt-0.5 text-indigo-100 font-medium">
+                         {subjectDrawerStudent.name} &nbsp;·&nbsp;
+                         <span className="font-mono">{subjectDrawerStudent.registerNumber}</span>
+                         &nbsp;·&nbsp;{subjectDrawerStudent.department}&nbsp;Sem {subjectDrawerStudent.semester}
+                       </p>
+                     )}
+                   </div>
+                   <button
+                     onClick={() => setSubjectDrawerOpen(false)}
+                     className="text-white/80 hover:text-white hover:bg-white/20 rounded-lg p-1.5 transition-colors ml-4 flex-shrink-0"
+                   >
+                     <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                       <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                     </svg>
+                   </button>
+                 </div>
+
+                 {/* Drawer Body */}
+                 <div className="flex-1 overflow-y-auto px-6 py-5">
+                   {subjectDrawerLoading && (
+                     <div className="flex flex-col items-center justify-center h-64 gap-4">
+                       <div className="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                       <p className="text-gray-500 text-sm">Loading subjects…</p>
+                     </div>
+                   )}
+                   {subjectDrawerError && !subjectDrawerLoading && (
+                     <div className="mt-8 p-4 rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm font-medium flex items-start gap-3">
+                       <span className="text-lg mt-0.5">⚠️</span>
+                       <span>{subjectDrawerError}</span>
+                     </div>
+                   )}
+                   {!subjectDrawerLoading && !subjectDrawerError && subjectDrawerData && (
+                     <>
+                       <div className="flex gap-3 mb-5 flex-wrap">
+                         <span className="inline-flex items-center gap-1.5 bg-indigo-50 text-indigo-700 border border-indigo-200 text-xs font-bold px-3 py-1.5 rounded-full">Total: {subjectDrawerData.totalSubjects}</span>
+                         <span className="inline-flex items-center gap-1.5 bg-blue-50 text-blue-700 border border-blue-200 text-xs font-bold px-3 py-1.5 rounded-full">Regular: {(subjectDrawerData.subjects||[]).filter(s=>s.category==="REGULAR").length}</span>
+                         <span className="inline-flex items-center gap-1.5 bg-red-50 text-red-700 border border-red-200 text-xs font-bold px-3 py-1.5 rounded-full">Arrear: {(subjectDrawerData.subjects||[]).filter(s=>s.category==="ARREAR").length}</span>
+                         <span className="inline-flex items-center gap-1.5 bg-purple-50 text-purple-700 border border-purple-200 text-xs font-bold px-3 py-1.5 rounded-full">Special: {(subjectDrawerData.subjects||[]).filter(s=>!["REGULAR","ARREAR"].includes(s.category)).length}</span>
+                       </div>
+                       {subjectDrawerData.subjects.length === 0 ? (
+                         <div className="flex flex-col items-center justify-center h-52 gap-3 text-gray-400">
+                           <span className="text-5xl">📭</span>
+                           <p className="font-semibold text-base">No subjects assigned for this student.</p>
+                         </div>
+                       ) : (
+                         <div className="overflow-x-auto rounded-xl border border-gray-200 shadow-sm">
+                           <table className="w-full text-sm text-left">
+                             <thead className="bg-gray-50 text-gray-500 uppercase text-xs font-bold border-b border-gray-200">
+                               <tr>
+                                 <th className="px-4 py-3">Code</th>
+                                 <th className="px-4 py-3">Subject Name</th>
+                                 <th className="px-4 py-3">Category</th>
+                                 <th className="px-4 py-3 text-center">Sem</th>
+                                 <th className="px-4 py-3 text-center">Credits</th>
+                                 <th className="px-4 py-3">Paper</th>
+                               </tr>
+                             </thead>
+                             <tbody className="divide-y divide-gray-100">
+                               {subjectDrawerData.subjects
+                                 .sort((a,b)=>({REGULAR:0,ARREAR:1,HONOURS:2,MINOR:3,ELECTIVE:4,"VALUE ADDED":5,OTHER:6}[a.category]??7)-({REGULAR:0,ARREAR:1,HONOURS:2,MINOR:3,ELECTIVE:4,"VALUE ADDED":5,OTHER:6}[b.category]??7))
+                                 .map((sub,i)=>{
+                                   const cc={REGULAR:"bg-blue-100 text-blue-800",ARREAR:"bg-red-100 text-red-700",HONOURS:"bg-yellow-100 text-yellow-800",MINOR:"bg-green-100 text-green-800",ELECTIVE:"bg-cyan-100 text-cyan-800","VALUE ADDED":"bg-orange-100 text-orange-800",OTHER:"bg-gray-100 text-gray-700"};
+                                   return (
+                                     <tr key={`${sub.subjectCode}-${i}`} className="hover:bg-gray-50 transition-colors">
+                                       <td className="px-4 py-3 font-mono font-bold text-gray-800 text-xs">{sub.subjectCode}</td>
+                                       <td className="px-4 py-3 text-gray-700 font-medium">{sub.subjectName||"—"}</td>
+                                       <td className="px-4 py-3"><span className={`inline-block text-[11px] font-bold px-2 py-0.5 rounded-full ${cc[sub.category]||"bg-gray-100 text-gray-700"}`}>{sub.category}</span></td>
+                                       <td className="px-4 py-3 text-center text-gray-600">{sub.semester}</td>
+                                       <td className="px-4 py-3 text-center text-gray-600 font-semibold">{sub.credits??0}</td>
+                                       <td className="px-4 py-3 text-xs text-gray-500">{sub.paperType}</td>
+                                     </tr>
+                                   );
+                                 })}
+                             </tbody>
+                           </table>
+                         </div>
+                       )}
+                     </>
+                   )}
+                 </div>
+
+                 {/* Drawer Footer */}
+                 <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 flex-shrink-0 flex justify-end">
+                   <button onClick={() => setSubjectDrawerOpen(false)} className="bg-white border border-gray-300 text-gray-700 font-semibold px-5 py-2 rounded-lg text-sm hover:bg-gray-50 transition-colors shadow-sm">
+                     ← Close &amp; Return to List
+                   </button>
+                 </div>
+               </motion.div>
+             </>
+           )}
+         </AnimatePresence>
+         {/* ─── END STUDENT SUBJECT DRAWER ─── */}
+
+            </motion.div>
+         )}
+
+         {/* SUBJECTS VIEW */}
+         {activeTab === "subjects" && (
            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
               <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
                  <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
@@ -1158,11 +1399,39 @@ export default function AdminDashboard({ onLogout }) {
 
             {/* Upload cards */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-                <h3 className="font-bold text-lg mb-1 text-gray-700">1. Upload Subjects</h3>
-                <p className="text-xs text-gray-500 mb-3">Department &amp; Semester are automatically detected from each row in the Excel file (e.g. <code className="bg-gray-100 px-1 py-0.5 rounded text-indigo-600 font-mono">subjects.xlsx</code> format).</p>
-                <p className="text-xs text-slate-400 mb-3 font-mono">Columns: Subject Code | Subject Name | Department | Semester | Credits | Paper Type</p>
-                <input type="file" onChange={handleSubjectUpload} accept=".xlsx, .csv" className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer" />
+              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 space-y-4">
+                <div>
+                  <h3 className="font-bold text-lg mb-1 text-gray-700">1. Subject Upload Module</h3>
+                  <p className="text-xs text-gray-500">Choose an upload option below based on the type of subjects being registered.</p>
+                </div>
+                
+                {/* Option 1 - Regular Subjects */}
+                <div className="p-4 rounded-lg bg-indigo-50/60 border border-indigo-100 space-y-2">
+                  <div className="flex justify-between items-center">
+                    <h4 className="font-bold text-sm text-indigo-900">Option 1 – Regular Subjects (Common Upload)</h4>
+                    <span className="bg-indigo-200 text-indigo-800 text-[10px] font-bold px-2 py-0.5 rounded">Existing Workflow</span>
+                  </div>
+                  <p className="text-xs text-gray-600">Assigns common subjects for all students in the selected department &amp; semester.</p>
+                  <p className="text-xs text-slate-500 font-mono">Excel Format: Subject Code | Subject Name | Department | Semester | Credits | Paper Type</p>
+                  <label className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg text-xs cursor-pointer inline-flex items-center gap-1.5 transition-colors shadow-sm">
+                    <span>📘</span> Upload Regular Subjects
+                    <input type="file" onChange={handleSubjectUpload} accept=".xlsx, .csv" className="hidden" />
+                  </label>
+                </div>
+
+                {/* Option 2 – Other Subjects (Student-Specific Upload) */}
+                <div className="p-4 rounded-lg bg-purple-50/60 border border-purple-100 space-y-2">
+                  <div className="flex justify-between items-center">
+                    <h4 className="font-bold text-sm text-purple-900">Option 2 – Upload Other Subjects (Student-Specific)</h4>
+                    <span className="bg-purple-200 text-purple-800 text-[10px] font-bold px-2 py-0.5 rounded">New Feature</span>
+                  </div>
+                  <p className="text-xs text-gray-600">Assigns specific subjects (Arrears, Honours, Minors, Electives, Value Added, etc.) to individual students.</p>
+                  <p className="text-xs text-slate-500 font-mono">Excel Format: Subject Code | Subject Name | Subject Semester | Credits | Category | Roll Number</p>
+                  <label className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-lg text-xs cursor-pointer inline-flex items-center gap-1.5 transition-colors shadow-sm">
+                    <span>🎓</span> Upload Other Subjects
+                    <input type="file" onChange={handleOtherSubjectUpload} accept=".xlsx, .csv" className="hidden" />
+                  </label>
+                </div>
               </div>
               <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
                 <h3 className="font-bold text-lg text-gray-700 mb-1">2. Upload Students / Logins</h3>

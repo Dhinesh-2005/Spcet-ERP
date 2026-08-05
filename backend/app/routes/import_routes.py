@@ -4,7 +4,7 @@ from typing import List, Dict, Any
 from io import BytesIO
 from bson import ObjectId
 from app.database import db, clean_doc
-from app.models.schemas import SubjectModel, ExternalMarksModel, QuestionPaperModel
+from app.models.schemas import SubjectModel, ExternalMarksModel, QuestionPaperModel, StudentSubjectModel, OtherSubjectUploadRow
 from app.services.result_service import result_service
 
 router = APIRouter()
@@ -109,6 +109,169 @@ async def upload_subjects(subjects: List[SubjectModel]):
         "skipped": len(skipped),
         "skippedDetails": skipped
     }
+
+
+@router.post("/other-subjects")
+async def upload_other_subjects(rows: List[Dict[str, Any]]):
+    total_processed = 0
+    successful_assignments = 0
+    duplicate_skipped = 0
+    invalid_roll_numbers = []
+    invalid_subject_codes = []
+    validation_errors = []
+
+    VALID_CATEGORIES = {"ARREAR", "HONOURS", "MINOR", "ELECTIVE", "VALUE ADDED", "OTHER"}
+
+    for row_idx, row in enumerate(rows, start=1):
+        total_processed += 1
+        
+        subject_code = str(row.get("subjectCode") or row.get("Subject Code") or "").strip().upper()
+        subject_name = str(row.get("subjectName") or row.get("Subject Name") or "").strip()
+        subject_sem_raw = row.get("subjectSemester") or row.get("Subject Semester") or row.get("semester") or 0
+        try:
+            subject_sem = int(subject_sem_raw)
+        except (ValueError, TypeError):
+            subject_sem = 0
+
+        credits_raw = row.get("credits") or row.get("Credits") or row.get("credit") or row.get("Credit") or 0
+        try:
+            subject_credits = max(0, int(float(str(credits_raw))))
+        except (ValueError, TypeError):
+            subject_credits = 0
+            
+        category = str(row.get("category") or row.get("Category") or "OTHER").strip().upper()
+        if category not in VALID_CATEGORIES:
+            category = "OTHER"
+            
+        roll_numbers_raw = str(
+            row.get("rollNumbers") or 
+            row.get("Roll Numbers") or 
+            row.get("rollNumber") or 
+            row.get("Roll Number") or 
+            row.get("registerNumber") or 
+            row.get("Register Number") or ""
+        ).strip()
+
+        if not subject_code:
+            validation_errors.append(f"Row {row_idx}: Missing Subject Code")
+            continue
+
+        if not roll_numbers_raw:
+            validation_errors.append(f"Row {row_idx} ({subject_code}): No Roll Numbers provided")
+            continue
+
+        # 1. Verify/Look up Subject Code in db.subjects (with flexible matching & auto-registration)
+        clean_sub_code = _clean_string(subject_code)
+        existing_subject = await db.subjects.find_one({"subjectCode": subject_code})
+        if not existing_subject:
+            existing_subject = await db.subjects.find_one({"subjectCode": {"$regex": f"^{re.escape(subject_code)}$", "$options": "i"}})
+        if not existing_subject:
+            all_subs = [s async for s in db.subjects.find({})]
+            existing_subject = next((s for s in all_subs if _clean_string(s.get("subjectCode")) == clean_sub_code), None)
+
+        if existing_subject:
+            # 2. Validate Subject Name matches Subject Code if provided
+            db_sub_name = str(existing_subject.get("subjectName") or "").strip()
+            if subject_name and db_sub_name:
+                if _clean_string(subject_name) != _clean_string(db_sub_name):
+                    validation_errors.append(
+                        f"Row {row_idx}: Subject Name '{subject_name}' does not match registered name '{db_sub_name}' for code {subject_code}"
+                    )
+                    continue
+            # Update credits in db.subjects if a valid value is provided and differs
+            existing_credits = int(existing_subject.get("credits") or 0)
+            if subject_credits > 0 and subject_credits != existing_credits:
+                await db.subjects.update_one(
+                    {"subjectCode": subject_code},
+                    {"$set": {"credits": subject_credits}}
+                )
+                existing_subject["credits"] = subject_credits
+        else:
+            # Auto-register new subject in db.subjects if it hasn't been uploaded yet
+            if not subject_name:
+                invalid_subject_codes.append(f"{subject_code} (Row {row_idx})")
+                continue
+            db_sub_name = subject_name
+            # Determine department from the first valid roll number
+            preview_rolls = [r.strip().upper() for r in re.split(r'[,;\s\n\r]+', roll_numbers_raw) if r.strip()]
+            auto_dept = "GENERAL"
+            for pr in preview_rolls:
+                preview_student = await db.students.find_one({"registerNumber": pr})
+                if not preview_student:
+                    preview_student = await db.students.find_one({"registerNumber": {"$regex": f"^{re.escape(pr)}$", "$options": "i"}})
+                if preview_student:
+                    auto_dept = str(preview_student.get("department", "GENERAL")).strip().upper()
+                    break
+            new_sub_doc = {
+                "subjectCode": subject_code,
+                "subjectName": subject_name,
+                "department": auto_dept,
+                "semester": subject_sem or 1,
+                "credits": subject_credits,
+                "paperType": "THEORY"
+            }
+            await db.subjects.insert_one(new_sub_doc)
+            existing_subject = new_sub_doc
+
+
+        # 3. Split Roll Numbers using commas, newlines, spaces, or semicolons
+        rolls = [r.strip().upper() for r in re.split(r'[,;\s\n\r]+', roll_numbers_raw) if r.strip()]
+
+        for roll in rolls:
+            # 4. Verify student exists
+            student = await db.students.find_one({"registerNumber": roll})
+            if not student:
+                student = await db.students.find_one({"registerNumber": {"$regex": f"^{re.escape(roll)}$", "$options": "i"}})
+
+            if not student:
+                invalid_roll_numbers.append(f"{roll} (for {subject_code})")
+                continue
+
+            target_reg = student.get("registerNumber", roll)
+
+            # 5. Prevent duplicate subject assignments for the same student
+            existing_mapping = await db.student_subjects.find_one({
+                "registerNumber": target_reg,
+                "subjectCode": subject_code
+            })
+
+            if existing_mapping:
+                duplicate_skipped += 1
+                continue
+
+            # 6. Create student-subject mapping
+            mapping_doc = {
+                "registerNumber": target_reg,
+                "subjectCode": subject_code,
+                "subjectName": db_sub_name or subject_name,
+                "subjectSemester": subject_sem or existing_subject.get("semester", 1),
+                "category": category,
+                "department": student.get("department", "")
+            }
+            await db.student_subjects.insert_one(mapping_doc)
+            successful_assignments += 1
+
+    return {
+        "message": f"Processed {total_processed} record(s): {successful_assignments} successful assignments.",
+        "totalProcessed": total_processed,
+        "successfulAssignments": successful_assignments,
+        "duplicateSkipped": duplicate_skipped,
+        "invalidRollNumbers": list(set(invalid_roll_numbers)),
+        "invalidSubjectCodes": list(set(invalid_subject_codes)),
+        "validationErrors": validation_errors
+    }
+
+
+@router.get("/student-subjects")
+async def get_student_subjects(registerNumber: str = None, subjectCode: str = None):
+    query = {}
+    if registerNumber:
+        query["registerNumber"] = registerNumber.strip().upper()
+    if subjectCode:
+        query["subjectCode"] = subjectCode.strip().upper()
+    docs = [clean_doc(doc) async for doc in db.student_subjects.find(query)]
+    return docs
+
 
 @router.post("/logins")
 async def upload_logins(users: List[Dict[str, Any]]):
@@ -378,10 +541,15 @@ async def get_all_subjects(
 @router.delete("/subjects/{subjectCode}")
 async def delete_subject(subjectCode: str, department: str):
     """Delete a single subject by subjectCode + department."""
+    code = subjectCode.strip().upper()
+    dept = department.strip().upper()
     result = await db.subjects.delete_one({
-        "subjectCode": subjectCode.strip().upper(),
-        "department": department.strip().upper()
+        "subjectCode": code,
+        "department": dept
     })
+    # Also clean up student-specific subject assignments for this subject
+    await db.student_subjects.delete_many({"subjectCode": code})
+
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail=f"Subject {subjectCode} not found for dept {department}")
     return {"message": f"Subject {subjectCode} deleted successfully."}

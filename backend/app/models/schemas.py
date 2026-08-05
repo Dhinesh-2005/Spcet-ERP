@@ -35,6 +35,21 @@ class SubjectModel(BaseModel):
     credits: Optional[int] = 0
     paperType: Optional[str] = "THEORY"
 
+class StudentSubjectModel(BaseModel):
+    id: Optional[str] = None
+    registerNumber: str
+    subjectCode: str
+    subjectSemester: int
+    category: str
+
+class OtherSubjectUploadRow(BaseModel):
+    subjectCode: str
+    subjectName: Optional[str] = ""
+    subjectSemester: int
+    category: str
+    rollNumbers: str
+
+
 class InternalMarksModel(BaseModel):
     registerNumber: str
     subjectCode: str

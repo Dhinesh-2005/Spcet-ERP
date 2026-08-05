@@ -12,7 +12,6 @@ export function normalizeRowKeys(row) {
     if (lowerKey.includes("roll") || lowerKey.includes("reg") || lowerKey === "id") {
       val = typeof val === "number" ? String(Math.trunc(val)) : String(val).trim();
       out["registerNumber"] = val; 
-      continue;
     }
     out[lowerKey] = val ?? "";
   }
