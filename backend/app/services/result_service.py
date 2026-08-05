@@ -5,7 +5,14 @@ from typing import List
 class ResultService:
     async def calculate_results(self):
         subjects = [s async for s in db.subjects.find({})]
-        subject_map = {s["subjectCode"]: s for s in subjects}
+        students = [st async for st in db.students.find({})]
+        student_dept_map = {s["registerNumber"]: s.get("department", "") for s in students}
+
+        subject_map = {}
+        for s in subjects:
+            subject_map[(s["subjectCode"], s.get("department", ""))] = s
+            subject_map[s["subjectCode"]] = s
+
         internals = [i async for i in db.internals.find({})]
         internal_map = {}
         for item in internals:
@@ -13,11 +20,13 @@ class ResultService:
         externals = [e async for e in db.externals.find({})]
         results = []
         for em in externals:
-            sub = subject_map.get(em["subjectCode"])
+            reg_no = em.get("registerNumber", "")
+            dept = student_dept_map.get(reg_no, "")
+            sub = subject_map.get((em["subjectCode"], dept)) or subject_map.get(em["subjectCode"])
             if not sub:
                 continue
             internal_score = 0.0
-            im = internal_map.get(em.get("registerNumber", ""), {}).get(em["subjectCode"])
+            im = internal_map.get(reg_no, {}).get(em["subjectCode"])
             if im:
                 internal_score = im.get("finalInternal", 0.0)
             external_score = em.get("externalMarks", 0)
@@ -47,10 +56,10 @@ class ResultService:
                 grade = "RA"
                 status = "FAIL"
             results.append({
-                "registerNumber": em["registerNumber"],
+                "registerNumber": reg_no,
                 "subjectCode": sub["subjectCode"],
                 "semester": str(sub["semester"]),
-                "department": sub["department"],
+                "department": sub.get("department", dept),
                 "grade": grade,
                 "result": status,
                 "finalMarks": rounded,
@@ -61,7 +70,9 @@ class ResultService:
             await db.results.insert_many(results)
 
     async def get_results_by_sem_and_dept(self, semester: str, department: str):
-        return [doc async for doc in db.results.find({"semester": semester, "department": department})]
+        from app.database import clean_doc
+        return [clean_doc(doc) async for doc in db.results.find({"semester": str(semester), "department": department})]
+
 
     async def publish_results(self, semester: str, department: str):
         await db.results.update_many({"semester": semester, "department": department}, {"$set": {"isPublished": True}})

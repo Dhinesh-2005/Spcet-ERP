@@ -68,6 +68,8 @@ class QuestionPaperModel(BaseModel):
     examType: Optional[str] = "SEMESTER"
     facultyName: Optional[str] = None
     paperData: Optional[str] = None
+    semester: Optional[str] = None
+    unit: Optional[str] = None
 
 class RequisitionModel(BaseModel):
     id: Optional[str] = None
@@ -99,3 +101,28 @@ class RequisitionModel(BaseModel):
     pan: Optional[str] = None
     address: Optional[str] = None
     totalAmount: Optional[str] = None
+
+class QuestionBankModel(BaseModel):
+    id: Optional[str] = None
+    subjectId: Optional[str] = None
+    subjectCode: str
+    subjectName: Optional[str] = None
+    regulation: Optional[str] = None
+    semester: Optional[Any] = None
+    unit: str
+    question: str
+    part: str
+    marks: float
+    co: str
+    kLevel: Optional[str] = "K1"
+    createdAt: Optional[str] = None
+    updatedAt: Optional[str] = None
+
+class GenerateQuestionPaperRequest(BaseModel):
+    subjectCode: str
+    unit: str
+    partACount: Optional[int] = 5
+    partBCount: Optional[int] = 4
+    partCCount: Optional[int] = 2
+
+
