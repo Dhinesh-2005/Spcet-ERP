@@ -23,6 +23,61 @@ const formatDept = (d) => {
   return "DEPARTMENT OF " + d;
 };
 
+// Helper: reads a File and returns { base64, aspectRatio }
+const readImageAsData = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const base64 = e.target.result;
+    const img = new Image();
+    img.onload = () => resolve({ base64, aspectRatio: img.naturalWidth / img.naturalHeight });
+    img.onerror = () => resolve({ base64, aspectRatio: 1 });
+    img.src = base64;
+  };
+  reader.onerror = reject;
+  reader.readAsDataURL(file);
+});
+
+// Per-question image upload button with thumbnail preview
+function QuestionImageUpload({ image, onChange }) {
+  const id = React.useId();
+  return (
+    <div className="flex items-start gap-2 mt-1">
+      {image ? (
+        <div className="relative group">
+          <img src={image.base64} alt="diagram" className="h-16 w-auto max-w-[120px] rounded border border-gray-300 object-contain bg-gray-50" />
+          <button
+            type="button"
+            onClick={() => onChange(null)}
+            className="absolute -top-1.5 -right-1.5 bg-red-500 text-white rounded-full w-4 h-4 text-xs flex items-center justify-center leading-none shadow hover:bg-red-600"
+            title="Remove image"
+          >×</button>
+        </div>
+      ) : (
+        <label
+          htmlFor={id}
+          className="cursor-pointer flex items-center gap-1 text-xs bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 font-bold px-2 py-1 rounded transition-colors whitespace-nowrap"
+          title="Attach diagram/image to this question"
+        >
+          🖼 Add Image
+          <input
+            id={id}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+              const data = await readImageAsData(file);
+              onChange(data);
+              e.target.value = "";
+            }}
+          />
+        </label>
+      )}
+    </div>
+  );
+}
+
 export default function FacultyDashboard({ user, onLogout }) {
   const [view, setView] = useState("tasks"); 
   const [templateType, setTemplateType] = useState(1);
@@ -34,20 +89,84 @@ export default function FacultyDashboard({ user, onLogout }) {
   const [partB, setPartB] = useState(Array.from({ length: 5 }, (_, i) => ({ qNo: i + 11, a: { question: "", btl: "K2", co: `CO${i+1}`, marks: "13" }, b: { question: "", btl: "K2", co: `CO${i+1}`, marks: "13" } })));
   const [partC, setPartC] = useState({ qNo: 16, a: { question: "", btl: "K4", co: "CO5", marks: "15" }, b: { question: "", btl: "K4", co: "CO5", marks: "15" } });
   const [customContent, setCustomContent] = useState("");
+  // Unit test generator states
+  const [unitHeader, setUnitHeader] = useState({
+    qpCode: "24AD4R011",
+    examSessionType: "CONTINUOUS INTERNAL ASSESSMENT",
+    examMonth: "JULY",
+    examYear: "2026",
+    examSession: "CONTINUOUS INTERNAL ASSESSMENT July 2026",
+    semesterWord: "FIFTH SEMESTER",
+    ciaOption: "CIA - 1",
+    department: "Department of Information Technology",
+    commonBranches: "",
+    subject: "24AD4R011 - Data Communication and Computer Networks",
+    regulations: "(Regulations 2024)",
+    duration: "2:00 hours",
+    maxMarks: "50"
+  });
 
-  const [unitHeader, setUnitHeader] = useState({ examSession: "BE - DEGREE EXAMINATIONS", semesterWord: "", department: formatDept(user?.department), subject: "", regulations: "(Regulations 2021)", duration: "2 Hours", maxMarks: "50" });
-  const [unitPartA, setUnitPartA] = useState(Array.from({ length: 5 }, (_, i) => ({ qNo: i + 1, question: "", kLevel: "K1", co: "CO1" })));
-  const [unitPartB, setUnitPartB] = useState([
-    { qNo: 6, a: { question: "", marks: "13", kLevel: "K2", co: "CO2" }, b: { question: "", marks: "13", kLevel: "K2", co: "CO2" } },
-    { qNo: 7, a: { question: "", marks: "13", kLevel: "K3", co: "CO3" }, b: { question: "", marks: "13", kLevel: "K3", co: "CO3" } }
+  // State structures for Reg 2021
+  const [unitPartA2021, setUnitPartA2021] = useState([
+    { qNo: 1, question: "List the functions of Management.", marks: "2", kLevel: "K1", co: "CO1" },
+    { qNo: 2, question: "How does effectiveness differ from efficiency?", marks: "2", kLevel: "K1", co: "CO1" },
+    { qNo: 3, question: "Distinguish between public and private limited companies.", marks: "2", kLevel: "K1", co: "CO1" },
+    { qNo: 4, question: "What is Espirit-de-corps?", marks: "2", kLevel: "K1", co: "CO1" },
+    { qNo: 5, question: "What is scientific management?", marks: "2", kLevel: "K1", co: "CO1" }
   ]);
-  const [unitPartC, setUnitPartC] = useState([
-    { qNo: 8, a: { question: "", marks: "14", kLevel: "K4", co: "CO4" }, b: { question: "", marks: "14", kLevel: "K4", co: "CO4" } }
+  const [unitPartB2021, setUnitPartB2021] = useState([
+    {
+      qNo: 6,
+      a: { question: "Trace the historical development of management thought and evaluate its significance in modern organizations.", marks: "13", kLevel: "K3", co: "CO1" },
+      b: { question: "Discuss the role of organizational culture and external environment in influencing managerial decisions.", marks: "13", kLevel: "K3", co: "CO1" }
+    },
+    {
+      qNo: 7,
+      a: { question: "Analyze the functions of management and discuss how they collectively contribute to organizational performance with suitable examples.", marks: "13", kLevel: "K4", co: "CO1" },
+      b: { question: "Compare public sector and private sector enterprises with respect to ownership, objectives, and management practices.", marks: "13", kLevel: "K4", co: "CO1" }
+    }
   ]);
-  const [coDist, setCoDist] = useState({ marks: ['-','-','-','-','-','-'], perc: ['-','-','-','-','-','-'] });
+  const [unitPartC2021, setUnitPartC2021] = useState([
+    {
+      qNo: 8,
+      a: { question: "\"Management is the art of getting work done through people\". Comment on the statement and explain the various functions of management.", marks: "14", kLevel: "K4", co: "CO1" },
+      b: { question: "ABC Technologies Ltd. adopted digital transformation, remote working, and AI-based performance monitoring to remain competitive in the global market. While productivity initially improved, employees reported stress, work-life imbalance, and fear of job insecurity. Middle-level managers struggled with virtual leadership and coordination. Ethical concerns related to data privacy and constant monitoring also emerged. High employee turnover forced top management to rethink its management practices. Analyse the current management trends and issues highlighted in the case and suggest suitable managerial measures.", marks: "14", kLevel: "K4", co: "CO1" }
+    }
+  ]);
+
+  // State structures for Reg 2024 (PART A: 5x2=10, PART B: Q6(16m), Q7(16m), Q8(8m) OR choices)
+  const [unitPartA2024, setUnitPartA2024] = useState([
+    { qNo: 1, question: "What are the layers in OSI reference model?", marks: "2", kLevel: "K2", co: "CO1" },
+    { qNo: 2, question: "Define Full Duplex and Half Duplex transmission system.", marks: "2", kLevel: "K1", co: "CO1" },
+    { qNo: 3, question: "What are the four fundamental characteristics that the data communication system depends on?", marks: "2", kLevel: "K2", co: "CO1" },
+    { qNo: 4, question: "What is guided transmission media? Give one example.", marks: "2", kLevel: "K2", co: "CO1" },
+    { qNo: 5, question: "What is circuit switching network?", marks: "2", kLevel: "K1", co: "CO1" }
+  ]);
+  const [unitPartB2024, setUnitPartB2024] = useState([
+    {
+      qNo: 6,
+      a: { question: "Apply the concepts of LAN, MAN, WAN, Internet, and Intranet to design a suitable network setup for an educational institution or organization. Justify the selection of each network type.", marks: "16", kLevel: "K3", co: "CO1" },
+      b: { question: "Illustrate the working of the TCP/IP protocol suite by applying it to a real-time data communication scenario. Explain the role of each layer with a neat diagram.", marks: "16", kLevel: "K3", co: "CO1" }
+    },
+    {
+      qNo: 7,
+      a: { question: "Analyze different network topologies (bus, star, ring, mesh, and hybrid) and determine their suitability for various real-world networking scenarios. Justify your choice with advantages and disadvantages.", marks: "16", kLevel: "K3", co: "CO1" },
+      b: { question: "Critically compare the OSI and TCP/IP models in terms of their structure, layering, and protocol functionality. Justify the necessity of layer five in the OSI model, particularly in the context of modern networking protocols like HTTP and FTP.", marks: "16", kLevel: "K4", co: "CO1" }
+    },
+    {
+      qNo: 8,
+      a: { question: "Analyze a data communication process and demonstrate how data flows through the 8 different layers of the OSI model. Explain the function of each layer in this context.", marks: "8", kLevel: "K3", co: "CO1" },
+      b: { question: "Compare twisted pair, coaxial cable and optical fiber.", marks: "8", kLevel: "K4", co: "CO1" }
+    }
+  ]);
+
+  const [coDist, setCoDist] = useState({
+    marks: ["90", "-", "-", "-", "-", "-"],
+    perc: ["100", "-", "-", "-", "-", "-"]
+  });
 
   const [qbUnit, setQbUnit] = useState("Unit 1");
-
+  const [qbSubject, setQbSubject] = useState("");
   const [qbUploadFile, setQbUploadFile] = useState(null);
   const [uploadingQb, setUploadingQb] = useState(false);
 
@@ -141,24 +260,28 @@ export default function FacultyDashboard({ user, onLogout }) {
   // Computes CO marks distribution from all parts and updates coDist state
   const computeCoDist = (newPartA, newPartB, newPartC) => {
     const coMarks = { CO1: 0, CO2: 0, CO3: 0, CO4: 0, CO5: 0, CO6: 0 };
+    const is2024 = unitHeader.regulations.includes("2024");
 
     // Part A: 2 marks each question
-    newPartA.forEach(q => {
+    (newPartA || []).forEach(q => {
       const co = (q.co || "").toUpperCase().trim();
       if (co in coMarks) coMarks[co] += 2;
     });
 
-    // Part B: 13 marks each (count only 'a' slot per question since it's OR choice)
-    newPartB.forEach(q => {
+    // Part B:
+    (newPartB || []).forEach(q => {
+      const m = parseInt(q.a?.marks || (is2024 ? "16" : "13"), 10);
       const co = (q.a?.co || "").toUpperCase().trim();
-      if (co in coMarks) coMarks[co] += 13;
+      if (co in coMarks) coMarks[co] += isNaN(m) ? (is2024 ? 16 : 13) : m;
     });
 
-    // Part C: 14 marks each (count only 'a' slot per question since it's OR choice)
-    newPartC.forEach(q => {
-      const co = (q.a?.co || "").toUpperCase().trim();
-      if (co in coMarks) coMarks[co] += 14;
-    });
+    // Part C (for 2021 regulation)
+    if (!is2024 && newPartC) {
+      newPartC.forEach(q => {
+        const co = (q.a?.co || "").toUpperCase().trim();
+        if (co in coMarks) coMarks[co] += 14;
+      });
+    }
 
     const total = Object.values(coMarks).reduce((s, v) => s + v, 0);
     const coKeys = ["CO1", "CO2", "CO3", "CO4", "CO5", "CO6"];
@@ -176,22 +299,22 @@ export default function FacultyDashboard({ user, onLogout }) {
     const uMatch = selectedUnit.match(/\d+/);
     const targetCo = uMatch ? `CO${uMatch[0]}` : "CO1";
 
-    const newA = unitPartA.map(q => ({ ...q, co: targetCo }));
-    const newB = unitPartB.map(q => ({
-      ...q,
-      a: { ...q.a, co: targetCo },
-      b: { ...q.b, co: targetCo }
-    }));
-    const newC = unitPartC.map(q => ({
-      ...q,
-      a: { ...q.a, co: targetCo },
-      b: { ...q.b, co: targetCo }
-    }));
-
-    setUnitPartA(newA);
-    setUnitPartB(newB);
-    setUnitPartC(newC);
-    computeCoDist(newA, newB, newC);
+    const is2024 = unitHeader.regulations.includes("2024");
+    if (is2024) {
+      const newA = unitPartA2024.map(q => ({ ...q, co: targetCo }));
+      const newB = unitPartB2024.map(q => ({ ...q, a: { ...q.a, co: targetCo }, b: { ...q.b, co: targetCo } }));
+      setUnitPartA2024(newA);
+      setUnitPartB2024(newB);
+      computeCoDist(newA, newB, null);
+    } else {
+      const newA = unitPartA2021.map(q => ({ ...q, co: targetCo }));
+      const newB = unitPartB2021.map(q => ({ ...q, a: { ...q.a, co: targetCo }, b: { ...q.b, co: targetCo } }));
+      const newC = unitPartC2021.map(q => ({ ...q, a: { ...q.a, co: targetCo }, b: { ...q.b, co: targetCo } }));
+      setUnitPartA2021(newA);
+      setUnitPartB2021(newB);
+      setUnitPartC2021(newC);
+      computeCoDist(newA, newB, newC);
+    }
   };
 
   const applyGeneratedData = (data) => {
@@ -199,41 +322,95 @@ export default function FacultyDashboard({ user, onLogout }) {
 
     const unitMatch = (data.unit || qbUnit || "").match(/\d+/);
     const defaultCo = unitMatch ? `CO${unitMatch[0]}` : "CO1";
+    const is2024 = unitHeader.regulations.includes("2024");
 
-    let newPartA = unitPartA;
-    let newPartB = unitPartB;
-    let newPartC = unitPartC;
+    if (is2024) {
+      let newPartA = unitPartA2024;
+      let newPartB = unitPartB2024;
 
-    if (data.partA && data.partA.length > 0) {
-      newPartA = unitPartA.map((item, i) => ({
-        ...item,
-        question: data.partA[i]?.question || item.question,
-        kLevel:   data.partA[i]?.kLevel   || item.kLevel,
-        co:       data.partA[i]?.co        || defaultCo,
-      }));
-      setUnitPartA(newPartA);
+      if (data.partA && data.partA.length > 0) {
+        newPartA = unitPartA2024.map((item, i) => ({
+          ...item,
+          question: data.partA[i]?.question || item.question,
+          kLevel:   data.partA[i]?.kLevel   || item.kLevel,
+          co:       data.partA[i]?.co        || defaultCo,
+        }));
+        setUnitPartA2024(newPartA);
+      }
+
+      if (data.partB && data.partB.length > 0) {
+        // Data contains questions for part B (Q6a/b, Q7a/b, Q8a/b)
+        newPartB = unitPartB2024.map((item, i) => ({
+          ...item,
+          a: { ...item.a, question: data.partB[i*2]?.question   || item.a.question, kLevel: data.partB[i*2]?.kLevel   || item.a.kLevel, co: data.partB[i*2]?.co   || defaultCo },
+          b: { ...item.b, question: data.partB[i*2+1]?.question || item.b.question, kLevel: data.partB[i*2+1]?.kLevel || item.b.kLevel, co: data.partB[i*2+1]?.co || defaultCo },
+        }));
+        setUnitPartB2024(newPartB);
+      }
+      computeCoDist(newPartA, newPartB, null);
+    } else {
+      let newPartA = unitPartA2021;
+      let newPartB = unitPartB2021;
+      let newPartC = unitPartC2021;
+
+      if (data.partA && data.partA.length > 0) {
+        newPartA = unitPartA2021.map((item, i) => ({
+          ...item,
+          question: data.partA[i]?.question || item.question,
+          kLevel:   data.partA[i]?.kLevel   || item.kLevel,
+          co:       data.partA[i]?.co        || defaultCo,
+        }));
+        setUnitPartA2021(newPartA);
+      }
+
+      if (data.partB && data.partB.length > 0) {
+        newPartB = unitPartB2021.map((item, i) => ({
+          ...item,
+          a: { ...item.a, question: data.partB[i*2]?.question   || item.a.question, kLevel: data.partB[i*2]?.kLevel   || item.a.kLevel, co: data.partB[i*2]?.co   || defaultCo },
+          b: { ...item.b, question: data.partB[i*2+1]?.question || item.b.question, kLevel: data.partB[i*2+1]?.kLevel || item.b.kLevel, co: data.partB[i*2+1]?.co || defaultCo },
+        }));
+        setUnitPartB2021(newPartB);
+      }
+
+      if (data.partC && data.partC.length > 0) {
+        newPartC = unitPartC2021.map((item, i) => ({
+          ...item,
+          a: { ...item.a, question: data.partC[i*2]?.question   || item.a.question, kLevel: data.partC[i*2]?.kLevel   || item.a.kLevel, co: data.partC[i*2]?.co   || defaultCo },
+          b: { ...item.b, question: data.partC[i*2+1]?.question || item.b.question, kLevel: data.partC[i*2+1]?.kLevel || item.b.kLevel, co: data.partC[i*2+1]?.co || defaultCo },
+        }));
+        setUnitPartC2021(newPartC);
+      }
+      computeCoDist(newPartA, newPartB, newPartC);
     }
+  };
 
-    if (data.partB && data.partB.length > 0) {
-      newPartB = unitPartB.map((item, i) => ({
-        ...item,
-        a: { ...item.a, question: data.partB[i*2]?.question   || item.a.question, kLevel: data.partB[i*2]?.kLevel   || item.a.kLevel, co: data.partB[i*2]?.co   || defaultCo },
-        b: { ...item.b, question: data.partB[i*2+1]?.question || item.b.question, kLevel: data.partB[i*2+1]?.kLevel || item.b.kLevel, co: data.partB[i*2+1]?.co || defaultCo },
-      }));
-      setUnitPartB(newPartB);
+  const handleGenerateUnitWord = async () => {
+    if (!unitHeader.subject || !unitHeader.department) {
+      alert("Please fill Subject and Department fields.");
+      return;
     }
-
-    if (data.partC && data.partC.length > 0) {
-      newPartC = unitPartC.map((item, i) => ({
-        ...item,
-        a: { ...item.a, question: data.partC[i*2]?.question   || item.a.question, kLevel: data.partC[i*2]?.kLevel   || item.a.kLevel, co: data.partC[i*2]?.co   || defaultCo },
-        b: { ...item.b, question: data.partC[i*2+1]?.question || item.b.question, kLevel: data.partC[i*2+1]?.kLevel || item.b.kLevel, co: data.partC[i*2+1]?.co || defaultCo },
-      }));
-      setUnitPartC(newPartC);
+    try {
+      const is2024 = unitHeader.regulations.includes("2024");
+      const config = {
+        unitHeader,
+        unitPartA: is2024 ? unitPartA2024 : unitPartA2021,
+        unitPartB: is2024 ? unitPartB2024 : unitPartB2021,
+        unitPartC: is2024 ? null : unitPartC2021,
+        coDistribution: { marks: coDist.marks, percentage: coDist.perc }
+      };
+      await exportUnitTestPaperDocx(config);
+      try {
+        await fetch(`${API_BASE}/api/import/save-question-paper`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ subjectCode: unitHeader.subject, department: unitHeader.department, examSession: unitHeader.examSession, hasPartC: !is2024, examType: "UNIT_TEST", facultyName: user.name, semester: unitHeader.semesterWord, unit: qbUnit, paperData: JSON.stringify(config) }) });
+        if(activeTask) await handleUpdateReqStatus(activeTask.id, "SUBMITTED");
+      } catch (saveErr) {
+        console.warn("Could not save to portal DB:", saveErr);
+      }
+      alert("✅ Unit Test Document downloaded successfully!");
+      if (activeTask) setView("tasks");
+    } catch (err) {
+      console.error("Error generating unit test paper:", err);
+      alert("❌ Failed to generate Unit Test Paper: " + err.message);
     }
-
-    // Auto-calculate CO distribution from updated parts
-    computeCoDist(newPartA, newPartB, newPartC);
   };
 
 
@@ -244,21 +421,6 @@ export default function FacultyDashboard({ user, onLogout }) {
       await fetch(`${API_BASE}/api/import/save-question-paper`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ subjectCode: header.subject, department: header.department, examSession: header.examSession, hasPartC: templateType === 1, examType: "SEMESTER", facultyName: user.name, semester: header.semesters, unit: null, paperData: JSON.stringify(config) }) }); 
       if(activeTask) await handleUpdateReqStatus(activeTask.id, "SUBMITTED");
       alert("✅ Document downloaded and sent to Admin Portal!");
-      setView("tasks");
-    } catch(err) { console.warn(err); }
-  };
-
-  const handleGenerateUnitWord = async () => {
-    if (!unitHeader.subject || !unitHeader.department) {
-      alert("Please fill Subject and Department fields.");
-      return;
-    }
-    const config = { unitHeader, unitPartA, unitPartB, unitPartC, coDistribution: { marks: coDist.marks, percentage: coDist.perc } };
-    await exportUnitTestPaperDocx(config);
-    try {
-      await fetch(`${API_BASE}/api/import/save-question-paper`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ subjectCode: unitHeader.subject, department: unitHeader.department, examSession: unitHeader.examSession, hasPartC: false, examType: "UNIT_TEST", facultyName: user.name, semester: unitHeader.semesterWord, unit: qbUnit, paperData: JSON.stringify(config) }) });
-      if(activeTask) await handleUpdateReqStatus(activeTask.id, "SUBMITTED");
-      alert("✅ Unit Test Document downloaded and sent to Admin Portal!");
       setView("tasks");
     } catch(err) { console.warn(err); }
   };
@@ -281,22 +443,34 @@ export default function FacultyDashboard({ user, onLogout }) {
              <button
                onClick={() => {
                  setActiveTask(null);
-                 setUnitHeader({ 
-                   examSession: "BE - DEGREE EXAMINATIONS", 
-                   semesterWord: "", 
-                   department: "DEPARTMENT OF " + (user?.department || "CSE"), 
-                   subject: "", 
-                   regulations: "(Regulations 2021)", 
-                   duration: "2 Hours", 
-                   maxMarks: "50" 
+                 setUnitHeader({
+                   qpCode: "",
+                   examSessionType: "CONTINUOUS INTERNAL ASSESSMENT",
+                   examMonth: "JULY",
+                   examYear: "2026",
+                   examSession: "CONTINUOUS INTERNAL ASSESSMENT July 2026",
+                   semesterWord: "",
+                   ciaOption: "CIA - 1",
+                   department: "DEPARTMENT OF " + (user?.department || "CSE"),
+                   commonBranches: "",
+                   subject: "",
+                   regulations: "(Regulations 2024)",
+                   duration: "2:00 hours",
+                   maxMarks: "50"
                  });
-                 setUnitPartA(Array.from({ length: 5 }, (_, i) => ({ qNo: i + 1, question: "", kLevel: "K1", co: "CO1" })));
-                 setUnitPartB([
+                 setUnitPartA2021(Array.from({ length: 5 }, (_, i) => ({ qNo: i + 1, question: "", marks: "2", kLevel: "K1", co: "CO1" })));
+                 setUnitPartB2021([
                    { qNo: 6, a: { question: "", marks: "13", kLevel: "K2", co: "CO2" }, b: { question: "", marks: "13", kLevel: "K2", co: "CO2" } },
                    { qNo: 7, a: { question: "", marks: "13", kLevel: "K3", co: "CO3" }, b: { question: "", marks: "13", kLevel: "K3", co: "CO3" } }
                  ]);
-                 setUnitPartC([
+                 setUnitPartC2021([
                    { qNo: 8, a: { question: "", marks: "14", kLevel: "K4", co: "CO4" }, b: { question: "", marks: "14", kLevel: "K4", co: "CO4" } }
+                 ]);
+                 setUnitPartA2024(Array.from({ length: 5 }, (_, i) => ({ qNo: i + 1, question: "", marks: "2", kLevel: "K1", co: "CO1" })));
+                 setUnitPartB2024([
+                   { qNo: 6, a: { question: "", marks: "16", kLevel: "K3", co: "CO1" }, b: { question: "", marks: "16", kLevel: "K3", co: "CO1" } },
+                   { qNo: 7, a: { question: "", marks: "16", kLevel: "K3", co: "CO1" }, b: { question: "", marks: "16", kLevel: "K3", co: "CO1" } },
+                   { qNo: 8, a: { question: "", marks: "8", kLevel: "K3", co: "CO1" }, b: { question: "", marks: "8", kLevel: "K4", co: "CO1" } }
                  ]);
                  setCoDist({ marks: ['-','-','-','-','-','-'], perc: ['-','-','-','-','-','-'] });
                  setView("unit");
@@ -452,24 +626,97 @@ export default function FacultyDashboard({ user, onLogout }) {
         <main className="flex-1 max-w-5xl mx-auto w-full p-6 space-y-6">
 
           <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-100">
-            <h2 className="text-xl font-bold mb-4 text-teal-800">Unit Exam Header</h2>
+            <h2 className="text-xl font-bold mb-4 text-teal-800">Unit Exam Header Details</h2>
             <div className="grid grid-cols-2 gap-4">
-              <input value={unitHeader.examSession} onChange={e => setUnitHeader({...unitHeader, examSession: e.target.value})} className="p-2 border rounded" placeholder="Exam Session" />
-              <select value={unitHeader.semesterWord} onChange={e => setUnitHeader({...unitHeader, semesterWord: e.target.value})} className="p-2 border rounded bg-white text-sm">
-                <option value="">Select Semester</option>
-                <option value="First Semester">First Semester</option>
-                <option value="Second Semester">Second Semester</option>
-                <option value="Third Semester">Third Semester</option>
-                <option value="Fourth Semester">Fourth Semester</option>
-                <option value="Fifth Semester">Fifth Semester</option>
-                <option value="Sixth Semester">Sixth Semester</option>
-                <option value="Seventh Semester">Seventh Semester</option>
-                <option value="Eighth Semester">Eighth Semester</option>
-              </select>
-              <select value={unitHeader.department} onChange={e => setUnitHeader({...unitHeader, department: e.target.value})} className="p-2 border rounded bg-white text-sm font-bold text-teal-800"><option value="">Select Department</option>{DEPARTMENT_OPTIONS.map(d => <option key={d} value={d}>{d}</option>)}</select>
-              <input value={unitHeader.subject} onChange={e => setUnitHeader({...unitHeader, subject: e.target.value})} className="p-2 border rounded font-bold text-teal-700" placeholder="Subject" />
-              <input value={unitHeader.duration} onChange={e => setUnitHeader({...unitHeader, duration: e.target.value})} className="p-2 border rounded" placeholder="Duration" />
-              <input value={unitHeader.maxMarks} onChange={e => setUnitHeader({...unitHeader, maxMarks: e.target.value})} className="p-2 border rounded" placeholder="Max Marks" />
+              <div>
+                <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Question Paper Code *</label>
+                <input value={unitHeader.qpCode} onChange={e => setUnitHeader({...unitHeader, qpCode: e.target.value})} className="w-full p-2 border rounded font-mono font-bold text-teal-900" placeholder="Question Paper Code (e.g. CIA1GE3751)" />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-gray-600 uppercase mb-1">CIA Exam *</label>
+                <select value={unitHeader.ciaOption} onChange={e => setUnitHeader({...unitHeader, ciaOption: e.target.value})} className="w-full p-2 border rounded bg-white text-sm font-bold text-teal-800">
+                  <option value="CIA - 1">CIA - 1</option>
+                  <option value="CIA - 2">CIA - 2</option>
+                  <option value="CIA - 3">CIA - 3</option>
+                  <option value="CIA - 4">CIA - 4</option>
+                  <option value="CIA - 5">CIA - 5</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Regulation *</label>
+                <select value={unitHeader.regulations} onChange={e => setUnitHeader({...unitHeader, regulations: e.target.value})} className="w-full p-2 border rounded bg-white text-sm font-bold text-teal-800">
+                  <option value="(Regulations 2021)">(Regulations 2021)</option>
+                  <option value="(Regulations 2024)">(Regulations 2024)</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Assessment Type Header</label>
+                <div className="p-2 border rounded bg-gray-100 text-sm font-bold text-teal-900 flex items-center gap-2">
+                  <span>📝</span> CONTINUOUS INTERNAL ASSESSMENT
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Month *</label>
+                  <select value={unitHeader.examMonth} onChange={e => {
+                    const newMonth = e.target.value;
+                    const newSession = `CONTINUOUS INTERNAL ASSESSMENT ${newMonth} - ${unitHeader.examYear}`;
+                    setUnitHeader({...unitHeader, examMonth: newMonth, examSession: newSession});
+                  }} className="w-full p-2 border rounded bg-white text-sm font-bold">
+                    {["JANUARY","FEBRUARY","MARCH","APRIL","MAY","JUNE","JULY","AUGUST","SEPTEMBER","OCTOBER","NOVEMBER","DECEMBER"].map(m => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Year *</label>
+                  <input value={unitHeader.examYear} onChange={e => {
+                    const newYear = e.target.value;
+                    const newSession = `CONTINUOUS INTERNAL ASSESSMENT ${unitHeader.examMonth} - ${newYear}`;
+                    setUnitHeader({...unitHeader, examYear: newYear, examSession: newSession});
+                  }} className="w-full p-2 border rounded text-sm font-bold" placeholder="2026" />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Semester *</label>
+                <select value={unitHeader.semesterWord} onChange={e => setUnitHeader({...unitHeader, semesterWord: e.target.value})} className="w-full p-2 border rounded bg-white text-sm font-bold">
+                  <option value="">Select Semester</option>
+                  <option value="FIRST SEMESTER">FIRST SEMESTER</option>
+                  <option value="SECOND SEMESTER">SECOND SEMESTER</option>
+                  <option value="THIRD SEMESTER">THIRD SEMESTER</option>
+                  <option value="FOURTH SEMESTER">FOURTH SEMESTER</option>
+                  <option value="FIFTH SEMESTER">FIFTH SEMESTER</option>
+                  <option value="SIXTH SEMESTER">SIXTH SEMESTER</option>
+                  <option value="SEVENTH SEMESTER">SEVENTH SEMESTER</option>
+                  <option value="EIGHTH SEMESTER">EIGHTH SEMESTER</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Department *</label>
+                <select value={unitHeader.department} onChange={e => setUnitHeader({...unitHeader, department: e.target.value})} className="w-full p-2 border rounded bg-white text-sm font-bold text-teal-800">
+                  <option value="">Select Department</option>
+                  {DEPARTMENT_OPTIONS.map(d => <option key={d} value={d}>{d}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Common to Branches (Optional)</label>
+                <div className="flex items-center border rounded bg-white overflow-hidden focus-within:ring-2 focus-within:ring-teal-500">
+                  <span className="bg-gray-100 px-3 py-2 text-xs font-bold text-gray-600 border-r select-none whitespace-nowrap">Common to Branches</span>
+                  <input value={unitHeader.commonBranches} onChange={e => setUnitHeader({...unitHeader, commonBranches: e.target.value})} className="flex-1 p-2 text-sm outline-none font-medium" placeholder="IT, CSE, AIDS (Leave empty if not common)" />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Subject Code &amp; Title *</label>
+                <input value={unitHeader.subject} onChange={e => setUnitHeader({...unitHeader, subject: e.target.value})} className="w-full p-2 border rounded font-bold text-teal-700" placeholder="e.g. GE3751 PRINCIPLES OF MANAGEMENT" />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Duration *</label>
+                <input value={unitHeader.duration} onChange={e => setUnitHeader({...unitHeader, duration: e.target.value})} className="w-full p-2 border rounded" placeholder="e.g. 2:00 hours" />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Max. Marks *</label>
+                <input value={unitHeader.maxMarks} onChange={e => setUnitHeader({...unitHeader, maxMarks: e.target.value})} className="w-full p-2 border rounded" placeholder="e.g. 50" />
+              </div>
             </div>
           </div>
           
@@ -550,66 +797,254 @@ export default function FacultyDashboard({ user, onLogout }) {
             </form>
 
             <div className="bg-indigo-50 p-3 rounded-lg text-xs text-indigo-800 space-y-0.5">
-              <p className="font-bold">✨ Auto-Generation Rules:</p>
-              <ul className="list-disc list-inside space-y-0.5">
-                <li>Part A: 5 random questions (Q1 to Q5).</li>
-                <li>Part B: 2 questions with choices (Q6a/6b, Q7a/7b).</li>
-                <li>Part C: 1 question with choice (Q8a/8b).</li>
-              </ul>
+              <p className="font-bold">✨ Auto-Generation Rules ({unitHeader.regulations}):</p>
+              {unitHeader.regulations.includes("2024") ? (
+                <ul className="list-disc list-inside space-y-0.5">
+                  <li>PART-A: 5 questions (Q1 to Q5) - 5 × 2 = 10 Marks.</li>
+                  <li>PART-B: Q6 (16 Marks choice), Q7 (16 Marks choice), Q8 (8 Marks choice) = 40 Marks.</li>
+                </ul>
+              ) : (
+                <ul className="list-disc list-inside space-y-0.5">
+                  <li>PART-A: 5 questions (Q1 to Q5) - 5 × 2 = 10 Marks.</li>
+                  <li>PART-B: Q6 (13 Marks choice), Q7 (13 Marks choice) = 26 Marks.</li>
+                  <li>PART-C: Q8 (14 Marks choice) = 14 Marks.</li>
+                </ul>
+              )}
             </div>
           </div>
 
-          <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-100"><h2 className="text-xl font-bold mb-4">Part A (5 x 2 = 10 Marks)</h2>{unitPartA.map((q, index) => (<div key={index} className="flex gap-4 mb-3 items-start border-b pb-3"><span className="font-bold text-gray-500 w-8 pt-2">{q.qNo}.</span><textarea value={q.question} onChange={e => { const newA = [...unitPartA]; newA[index].question = e.target.value; setUnitPartA(newA); }} className="flex-1 p-2 border border-gray-300 rounded resize-none" rows="2" placeholder="Question..." /><input value={q.kLevel} onChange={e => { const newA = [...unitPartA]; newA[index].kLevel = e.target.value; setUnitPartA(newA); }} className="w-16 p-2 border rounded text-center" placeholder="K-Level" /><input value={q.co} onChange={e => { const newA = [...unitPartA]; newA[index].co = e.target.value; setUnitPartA(newA); }} className="w-16 p-2 border rounded text-center" placeholder="CO" /></div>))}</div>
-
-          {/* PART B UI WITH 6a OR 6b, 7a OR 7b */}
+          {/* PART A SECTION */}
           <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-100">
-            <h2 className="text-xl font-bold mb-4 text-teal-800">Part B (2 x 13 = 26 Marks) - (Q6a or Q6b, Q7a or Q7b)</h2>
-            {unitPartB.map((q, index) => (
+            <h2 className="text-xl font-bold mb-4">PART-A (5 × 2 = 10 Marks)</h2>
+            {(unitHeader.regulations.includes("2024") ? unitPartA2024 : unitPartA2021).map((q, index) => (
+              <div key={index} className="flex gap-4 mb-3 items-start border-b pb-3">
+                <span className="font-bold text-gray-500 w-8 pt-2">{q.qNo}.</span>
+                <div className="flex-1 flex flex-col gap-1">
+                  <textarea
+                    value={q.question}
+                    onChange={e => {
+                      if (unitHeader.regulations.includes("2024")) {
+                        const newA = [...unitPartA2024]; newA[index].question = e.target.value; setUnitPartA2024(newA);
+                      } else {
+                        const newA = [...unitPartA2021]; newA[index].question = e.target.value; setUnitPartA2021(newA);
+                      }
+                    }}
+                    className="w-full p-2 border border-gray-300 rounded resize-none"
+                    rows="2"
+                    placeholder="Question..."
+                  />
+                  <QuestionImageUpload
+                    image={q.image}
+                    onChange={img => {
+                      if (unitHeader.regulations.includes("2024")) {
+                        const newA = [...unitPartA2024]; newA[index].image = img; setUnitPartA2024(newA);
+                      } else {
+                        const newA = [...unitPartA2021]; newA[index].image = img; setUnitPartA2021(newA);
+                      }
+                    }}
+                  />
+                </div>
+                <input
+                  value={q.kLevel}
+                  onChange={e => {
+                    if (unitHeader.regulations.includes("2024")) {
+                      const newA = [...unitPartA2024]; newA[index].kLevel = e.target.value; setUnitPartA2024(newA);
+                    } else {
+                      const newA = [...unitPartA2021]; newA[index].kLevel = e.target.value; setUnitPartA2021(newA);
+                    }
+                  }}
+                  className="w-16 p-2 border rounded text-center"
+                  placeholder="K-Level"
+                />
+                <input
+                  value={q.co}
+                  onChange={e => {
+                    if (unitHeader.regulations.includes("2024")) {
+                      const newA = [...unitPartA2024]; newA[index].co = e.target.value; setUnitPartA2024(newA);
+                    } else {
+                      const newA = [...unitPartA2021]; newA[index].co = e.target.value; setUnitPartA2021(newA);
+                    }
+                  }}
+                  className="w-16 p-2 border rounded text-center"
+                  placeholder="CO"
+                />
+              </div>
+            ))}
+          </div>
+
+          {/* PART B SECTION */}
+          <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-100">
+            <h2 className="text-xl font-bold mb-4 text-teal-800">
+              {unitHeader.regulations.includes("2024") ? "PART-B (2 × 16 + 1 × 08 = 40 Marks)" : "PART-B (2 × 13 = 26 Marks)"}
+            </h2>
+            {(unitHeader.regulations.includes("2024") ? unitPartB2024 : unitPartB2021).map((q, index) => (
               <div key={index} className="mb-6 p-4 bg-slate-50 rounded-lg border border-slate-200 space-y-3">
                 <div className="font-bold text-lg text-slate-800">Question {q.qNo}</div>
                 <div className="flex gap-4 items-start">
                   <span className="font-bold text-slate-700 pt-2 font-mono whitespace-nowrap">{q.qNo}. (a)</span>
-                  <textarea value={q.a.question} onChange={e => { const newB = [...unitPartB]; newB[index].a.question = e.target.value; setUnitPartB(newB); }} className="flex-1 p-2 border border-gray-300 rounded resize-none" rows="2" placeholder="Option A question..." />
-                  <input value={q.a.marks} onChange={e => { const newB = [...unitPartB]; newB[index].a.marks = e.target.value; setUnitPartB(newB); }} className="w-16 p-2 border rounded text-center" placeholder="Marks" />
-                  <input value={q.a.kLevel} onChange={e => { const newB = [...unitPartB]; newB[index].a.kLevel = e.target.value; setUnitPartB(newB); }} className="w-16 p-2 border rounded text-center" placeholder="K-Level" />
-                  <input value={q.a.co} onChange={e => { const newB = [...unitPartB]; newB[index].a.co = e.target.value; setUnitPartB(newB); }} className="w-16 p-2 border rounded text-center" placeholder="CO" />
+                  <div className="flex-1 flex flex-col gap-1">
+                    <textarea
+                      value={q.a.question}
+                      onChange={e => {
+                        if (unitHeader.regulations.includes("2024")) {
+                          const newB = [...unitPartB2024]; newB[index].a.question = e.target.value; setUnitPartB2024(newB);
+                        } else {
+                          const newB = [...unitPartB2021]; newB[index].a.question = e.target.value; setUnitPartB2021(newB);
+                        }
+                      }}
+                      className="w-full p-2 border border-gray-300 rounded resize-none"
+                      rows="2"
+                      placeholder="Option A question..."
+                    />
+                    <QuestionImageUpload
+                      image={q.a.image}
+                      onChange={img => {
+                        if (unitHeader.regulations.includes("2024")) {
+                          const newB = [...unitPartB2024]; newB[index].a.image = img; setUnitPartB2024(newB);
+                        } else {
+                          const newB = [...unitPartB2021]; newB[index].a.image = img; setUnitPartB2021(newB);
+                        }
+                      }}
+                    />
+                  </div>
+                  <input
+                    value={q.a.marks}
+                    onChange={e => {
+                      if (unitHeader.regulations.includes("2024")) {
+                        const newB = [...unitPartB2024]; newB[index].a.marks = e.target.value; setUnitPartB2024(newB);
+                      } else {
+                        const newB = [...unitPartB2021]; newB[index].a.marks = e.target.value; setUnitPartB2021(newB);
+                      }
+                    }}
+                    className="w-16 p-2 border rounded text-center"
+                    placeholder="Marks"
+                  />
+                  <input
+                    value={q.a.kLevel}
+                    onChange={e => {
+                      if (unitHeader.regulations.includes("2024")) {
+                        const newB = [...unitPartB2024]; newB[index].a.kLevel = e.target.value; setUnitPartB2024(newB);
+                      } else {
+                        const newB = [...unitPartB2021]; newB[index].a.kLevel = e.target.value; setUnitPartB2021(newB);
+                      }
+                    }}
+                    className="w-16 p-2 border rounded text-center"
+                    placeholder="K-Level"
+                  />
+                  <input
+                    value={q.a.co}
+                    onChange={e => {
+                      if (unitHeader.regulations.includes("2024")) {
+                        const newB = [...unitPartB2024]; newB[index].a.co = e.target.value; setUnitPartB2024(newB);
+                      } else {
+                        const newB = [...unitPartB2021]; newB[index].a.co = e.target.value; setUnitPartB2021(newB);
+                      }
+                    }}
+                    className="w-16 p-2 border rounded text-center"
+                    placeholder="CO"
+                  />
                 </div>
                 <div className="text-center font-bold text-gray-400 text-sm italic my-1">(OR)</div>
                 <div className="flex gap-4 items-start">
                   <span className="font-bold text-slate-700 pt-2 font-mono whitespace-nowrap">{q.qNo}. (b)</span>
-                  <textarea value={q.b.question} onChange={e => { const newB = [...unitPartB]; newB[index].b.question = e.target.value; setUnitPartB(newB); }} className="flex-1 p-2 border border-gray-300 rounded resize-none" rows="2" placeholder="Option B question..." />
-                  <input value={q.b.marks} onChange={e => { const newB = [...unitPartB]; newB[index].b.marks = e.target.value; setUnitPartB(newB); }} className="w-16 p-2 border rounded text-center" placeholder="Marks" />
-                  <input value={q.b.kLevel} onChange={e => { const newB = [...unitPartB]; newB[index].b.kLevel = e.target.value; setUnitPartB(newB); }} className="w-16 p-2 border rounded text-center" placeholder="K-Level" />
-                  <input value={q.b.co} onChange={e => { const newB = [...unitPartB]; newB[index].b.co = e.target.value; setUnitPartB(newB); }} className="w-16 p-2 border rounded text-center" placeholder="CO" />
+                  <div className="flex-1 flex flex-col gap-1">
+                    <textarea
+                      value={q.b.question}
+                      onChange={e => {
+                        if (unitHeader.regulations.includes("2024")) {
+                          const newB = [...unitPartB2024]; newB[index].b.question = e.target.value; setUnitPartB2024(newB);
+                        } else {
+                          const newB = [...unitPartB2021]; newB[index].b.question = e.target.value; setUnitPartB2021(newB);
+                        }
+                      }}
+                      className="w-full p-2 border border-gray-300 rounded resize-none"
+                      rows="2"
+                      placeholder="Option B question..."
+                    />
+                    <QuestionImageUpload
+                      image={q.b.image}
+                      onChange={img => {
+                        if (unitHeader.regulations.includes("2024")) {
+                          const newB = [...unitPartB2024]; newB[index].b.image = img; setUnitPartB2024(newB);
+                        } else {
+                          const newB = [...unitPartB2021]; newB[index].b.image = img; setUnitPartB2021(newB);
+                        }
+                      }}
+                    />
+                  </div>
+                  <input
+                    value={q.b.marks}
+                    onChange={e => {
+                      if (unitHeader.regulations.includes("2024")) {
+                        const newB = [...unitPartB2024]; newB[index].b.marks = e.target.value; setUnitPartB2024(newB);
+                      } else {
+                        const newB = [...unitPartB2021]; newB[index].b.marks = e.target.value; setUnitPartB2021(newB);
+                      }
+                    }}
+                    className="w-16 p-2 border rounded text-center"
+                    placeholder="Marks"
+                  />
+                  <input
+                    value={q.b.kLevel}
+                    onChange={e => {
+                      if (unitHeader.regulations.includes("2024")) {
+                        const newB = [...unitPartB2024]; newB[index].b.kLevel = e.target.value; setUnitPartB2024(newB);
+                      } else {
+                        const newB = [...unitPartB2021]; newB[index].b.kLevel = e.target.value; setUnitPartB2021(newB);
+                      }
+                    }}
+                    className="w-16 p-2 border rounded text-center"
+                    placeholder="K-Level"
+                  />
+                  <input
+                    value={q.b.co}
+                    onChange={e => {
+                      if (unitHeader.regulations.includes("2024")) {
+                        const newB = [...unitPartB2024]; newB[index].b.co = e.target.value; setUnitPartB2024(newB);
+                      } else {
+                        const newB = [...unitPartB2021]; newB[index].b.co = e.target.value; setUnitPartB2021(newB);
+                      }
+                    }}
+                    className="w-16 p-2 border rounded text-center"
+                    placeholder="CO"
+                  />
                 </div>
               </div>
             ))}
           </div>
 
-          {/* PART C UI WITH 8a OR 8b */}
-          <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-100">
-            <h2 className="text-xl font-bold mb-4 text-purple-800">Part C (1 x 14 = 14 Marks) - (Q8a or Q8b)</h2>
-            {unitPartC.map((q, index) => (
-              <div key={index} className="p-4 bg-purple-50/50 rounded-lg border border-purple-200 space-y-3">
-                <div className="font-bold text-lg text-purple-900">Question {q.qNo}</div>
-                <div className="flex gap-4 items-start">
-                  <span className="font-bold text-slate-700 pt-2 font-mono whitespace-nowrap">{q.qNo}. (a)</span>
-                  <textarea value={q.a.question} onChange={e => { const newC = [...unitPartC]; newC[index].a.question = e.target.value; setUnitPartC(newC); }} className="flex-1 p-2 border border-gray-300 rounded resize-none" rows="2" placeholder="Option A question..." />
-                  <input value={q.a.marks} onChange={e => { const newC = [...unitPartC]; newC[index].a.marks = e.target.value; setUnitPartC(newC); }} className="w-16 p-2 border rounded text-center" placeholder="Marks" />
-                  <input value={q.a.kLevel} onChange={e => { const newC = [...unitPartC]; newC[index].a.kLevel = e.target.value; setUnitPartC(newC); }} className="w-16 p-2 border rounded text-center" placeholder="K-Level" />
-                  <input value={q.a.co} onChange={e => { const newC = [...unitPartC]; newC[index].a.co = e.target.value; setUnitPartC(newC); }} className="w-16 p-2 border rounded text-center" placeholder="CO" />
+          {/* PART C SECTION (Only for Reg 2021) */}
+          {!unitHeader.regulations.includes("2024") && (
+            <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-100">
+              <h2 className="text-xl font-bold mb-4 text-purple-800">PART-C (1 × 14 = 14 Marks) - (Q8a or Q8b)</h2>
+              {unitPartC2021.map((q, index) => (
+                <div key={index} className="p-4 bg-purple-50/50 rounded-lg border border-purple-200 space-y-3">
+                  <div className="font-bold text-lg text-purple-900">Question {q.qNo}</div>
+                  <div className="flex gap-4 items-start">
+                    <span className="font-bold text-slate-700 pt-2 font-mono whitespace-nowrap">{q.qNo}. (a)</span>
+                    <div className="flex-1 flex flex-col gap-1">
+                      <textarea value={q.a.question} onChange={e => { const newC = [...unitPartC2021]; newC[index].a.question = e.target.value; setUnitPartC2021(newC); }} className="w-full p-2 border border-gray-300 rounded resize-none" rows="2" placeholder="Option A question..." />
+                      <QuestionImageUpload image={q.a.image} onChange={img => { const newC = [...unitPartC2021]; newC[index].a.image = img; setUnitPartC2021(newC); }} />
+                    </div>
+                    <input value={q.a.marks} onChange={e => { const newC = [...unitPartC2021]; newC[index].a.marks = e.target.value; setUnitPartC2021(newC); }} className="w-16 p-2 border rounded text-center" placeholder="Marks" />
+                    <input value={q.a.kLevel} onChange={e => { const newC = [...unitPartC2021]; newC[index].a.kLevel = e.target.value; setUnitPartC2021(newC); }} className="w-16 p-2 border rounded text-center" placeholder="K-Level" />
+                    <input value={q.a.co} onChange={e => { const newC = [...unitPartC2021]; newC[index].a.co = e.target.value; setUnitPartC2021(newC); }} className="w-16 p-2 border rounded text-center" placeholder="CO" />
+                  </div>
+                  <div className="text-center font-bold text-gray-400 text-sm italic my-1">(OR)</div>
+                  <div className="flex gap-4 items-start">
+                    <span className="font-bold text-slate-700 pt-2 font-mono whitespace-nowrap">{q.qNo}. (b)</span>
+                    <div className="flex-1 flex flex-col gap-1">
+                      <textarea value={q.b.question} onChange={e => { const newC = [...unitPartC2021]; newC[index].b.question = e.target.value; setUnitPartC2021(newC); }} className="w-full p-2 border border-gray-300 rounded resize-none" rows="2" placeholder="Option B question..." />
+                      <QuestionImageUpload image={q.b.image} onChange={img => { const newC = [...unitPartC2021]; newC[index].b.image = img; setUnitPartC2021(newC); }} />
+                    </div>
+                    <input value={q.b.marks} onChange={e => { const newC = [...unitPartC2021]; newC[index].b.marks = e.target.value; setUnitPartC2021(newC); }} className="w-16 p-2 border rounded text-center" placeholder="Marks" />
+                    <input value={q.b.kLevel} onChange={e => { const newC = [...unitPartC2021]; newC[index].b.kLevel = e.target.value; setUnitPartC2021(newC); }} className="w-16 p-2 border rounded text-center" placeholder="K-Level" />
+                    <input value={q.b.co} onChange={e => { const newC = [...unitPartC2021]; newC[index].b.co = e.target.value; setUnitPartC2021(newC); }} className="w-16 p-2 border rounded text-center" placeholder="CO" />
+                  </div>
                 </div>
-                <div className="text-center font-bold text-gray-400 text-sm italic my-1">(OR)</div>
-                <div className="flex gap-4 items-start">
-                  <span className="font-bold text-slate-700 pt-2 font-mono whitespace-nowrap">{q.qNo}. (b)</span>
-                  <textarea value={q.b.question} onChange={e => { const newC = [...unitPartC]; newC[index].b.question = e.target.value; setUnitPartC(newC); }} className="flex-1 p-2 border border-gray-300 rounded resize-none" rows="2" placeholder="Option B question..." />
-                  <input value={q.b.marks} onChange={e => { const newC = [...unitPartC]; newC[index].b.marks = e.target.value; setUnitPartC(newC); }} className="w-16 p-2 border rounded text-center" placeholder="Marks" />
-                  <input value={q.b.kLevel} onChange={e => { const newC = [...unitPartC]; newC[index].b.kLevel = e.target.value; setUnitPartC(newC); }} className="w-16 p-2 border rounded text-center" placeholder="K-Level" />
-                  <input value={q.b.co} onChange={e => { const newC = [...unitPartC]; newC[index].b.co = e.target.value; setUnitPartC(newC); }} className="w-16 p-2 border rounded text-center" placeholder="CO" />
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
 
           <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-100"><h2 className="text-xl font-bold mb-4">Distribution of COs</h2><div className="grid grid-cols-7 gap-2 text-center font-bold text-sm bg-gray-100 p-2 rounded"><div>Evaluation</div><div>CO1</div><div>CO2</div><div>CO3</div><div>CO4</div><div>CO5</div><div>CO6</div></div><div className="grid grid-cols-7 gap-2 mt-2"><div className="font-bold pt-2 text-center">Marks</div>{coDist.marks.map((m, i) => <input key={`m${i}`} value={m} onChange={e => { const nm = [...coDist.marks]; nm[i] = e.target.value; setCoDist({...coDist, marks: nm}) }} className="border p-2 text-center rounded" />)}</div><div className="grid grid-cols-7 gap-2 mt-2"><div className="font-bold pt-2 text-center">%</div>{coDist.perc.map((p, i) => <input key={`p${i}`} value={p} onChange={e => { const np = [...coDist.perc]; np[i] = e.target.value; setCoDist({...coDist, perc: np}) }} className="border p-2 text-center rounded" />)}</div></div>
           <div className="flex justify-end pt-4 pb-10"><button onClick={handleGenerateUnitWord} className="bg-teal-600 text-white font-bold py-4 px-8 rounded-lg shadow-lg hover:bg-teal-700 active:scale-95 transition-all text-lg flex items-center gap-2">📄 Submit & Download Unit Test</button></div>

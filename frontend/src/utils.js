@@ -1,5 +1,5 @@
 import * as XLSX from "xlsx";
-import { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, AlignmentType, BorderStyle, Footer, PageNumber } from "docx";
+import { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, AlignmentType, BorderStyle, Footer, PageNumber, ImageRun } from "docx";
 import { saveAs } from "file-saver";
 
 export const API_BASE = import.meta.env.VITE_API_BASE || (import.meta.env.PROD ? "" : "http://localhost:8000");
@@ -223,65 +223,145 @@ export const exportUnitTestPaperDocx = async (config) => {
     // Register box: 40% label + 12 * 5% cells = 100% total
     const regBoxCells = Array.from({ length: 12 }).map(() => new TableCell({ width: { size: 5, type: WidthType.PERCENTAGE }, children: [new Paragraph({ text: " ", spacing: { before: 150, after: 150 } })] }));
     
-    const partARows = (unitPartA || []).map(q => new TableRow({ children: [createCell(q.qNo, 5), createCell(q.question, 75, false, AlignmentType.LEFT), createCell(q.kLevel, 10), createCell(q.co, 10)] }));
+    const is2024 = (unitHeader.regulations || "").includes("2024");
+
+    // Helper: build an image row spanning the full table width (centered)
+    const makeImageRow = async (imageData, width = 210, height = 176) => {
+      if (!imageData || !imageData.base64) return null;
+      try {
+        // Strip data URL prefix to get raw base64
+        const b64 = imageData.base64.split(',')[1] || imageData.base64;
+        const binary = atob(b64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        const buffer = bytes.buffer;
+        // Determine image type from data URL
+        const mimeMatch = imageData.base64.match(/data:(image\/[^;]+)/);
+        const ext = mimeMatch ? mimeMatch[1].split('/')[1] : 'png';
+        const typeMap = { jpeg: 'jpg', jpg: 'jpg', png: 'png', gif: 'gif', bmp: 'bmp', webp: 'webp' };
+        const imgType = typeMap[ext] || 'png';
+        // Fixed size per section: width x height
+        const imgRun = new ImageRun({ data: buffer, transformation: { width, height }, type: imgType });
+        return new TableRow({ children: [new TableCell({ columnSpan: 5, children: [new Paragraph({ children: [imgRun], alignment: AlignmentType.CENTER, spacing: { before: 100, after: 100 } })] })] });
+      } catch (e) { return null; }
+    };
+
+    const partARows = [];
+    for (const q of (unitPartA || [])) {
+      partARows.push(new TableRow({ children: [createCell(q.qNo, 5), createCell(q.question, 67, false, AlignmentType.LEFT), createCell(q.marks || "2", 8), createCell(q.co, 10), createCell(q.kLevel, 10)] }));
+      if (q.image) { const imgRow = await makeImageRow(q.image, 108, 88); if (imgRow) partARows.push(imgRow); }
+    }
     
     const partBRows = [];
-    (unitPartB || []).forEach(q => {
+    for (const q of (unitPartB || [])) {
       if (q.a && q.b) {
-        partBRows.push(new TableRow({ children: [createCell(`${q.qNo}. (a)`, 8), createCell(q.a.question, 64, false, AlignmentType.LEFT), createCell(q.a.marks || "13", 8), createCell(q.a.kLevel || "K2", 10), createCell(q.a.co || "CO2", 10)] }));
+        partBRows.push(new TableRow({ children: [createCell(`${q.qNo}.a.`, 8), createCell(q.a.question, 64, false, AlignmentType.LEFT), createCell(q.a.marks || (is2024 ? "16" : "13"), 8), createCell(q.a.co || "CO1", 10), createCell(q.a.kLevel || "K3", 10)] }));
+        if (q.a.image) { const imgRow = await makeImageRow(q.a.image, 210, 176); if (imgRow) partBRows.push(imgRow); }
         partBRows.push(new TableRow({ children: [createCell("", 8), createCell("(OR)", 64, true, AlignmentType.CENTER), createCell("", 8), createCell("", 10), createCell("", 10)] }));
-        partBRows.push(new TableRow({ children: [createCell(`${q.qNo}. (b)`, 8), createCell(q.b.question, 64, false, AlignmentType.LEFT), createCell(q.b.marks || "13", 8), createCell(q.b.kLevel || "K2", 10), createCell(q.b.co || "CO2", 10)] }));
+        partBRows.push(new TableRow({ children: [createCell(`${q.qNo}.b.`, 8), createCell(q.b.question, 64, false, AlignmentType.LEFT), createCell(q.b.marks || (is2024 ? "16" : "13"), 8), createCell(q.b.co || "CO1", 10), createCell(q.b.kLevel || "K3", 10)] }));
+        if (q.b.image) { const imgRow = await makeImageRow(q.b.image, 210, 176); if (imgRow) partBRows.push(imgRow); }
       } else {
-        partBRows.push(new TableRow({ children: [createCell(q.qNo, 5), createCell(q.question, 67, false, AlignmentType.LEFT), createCell(q.marks, 8), createCell(q.kLevel, 10), createCell(q.co, 10)] }));
+        partBRows.push(new TableRow({ children: [createCell(q.qNo, 5), createCell(q.question, 67, false, AlignmentType.LEFT), createCell(q.marks, 8), createCell(q.co, 10), createCell(q.kLevel, 10)] }));
+        if (q.image) { const imgRow = await makeImageRow(q.image, 210, 176); if (imgRow) partBRows.push(imgRow); }
       }
-    });
+    }
 
     const partCRows = [];
-    (unitPartC || []).forEach(q => {
-      if (q.a && q.b) {
-        partCRows.push(new TableRow({ children: [createCell(`${q.qNo}. (a)`, 8), createCell(q.a.question, 64, false, AlignmentType.LEFT), createCell(q.a.marks || "14", 8), createCell(q.a.kLevel || "K4", 10), createCell(q.a.co || "CO3", 10)] }));
-        partCRows.push(new TableRow({ children: [createCell("", 8), createCell("(OR)", 64, true, AlignmentType.CENTER), createCell("", 8), createCell("", 10), createCell("", 10)] }));
-        partCRows.push(new TableRow({ children: [createCell(`${q.qNo}. (b)`, 8), createCell(q.b.question, 64, false, AlignmentType.LEFT), createCell(q.b.marks || "14", 8), createCell(q.b.kLevel || "K4", 10), createCell(q.b.co || "CO3", 10)] }));
-      } else {
-        partCRows.push(new TableRow({ children: [createCell(q.qNo, 5), createCell(q.question, 67, false, AlignmentType.LEFT), createCell(q.marks, 8), createCell(q.kLevel, 10), createCell(q.co, 10)] }));
+    if (!is2024 && unitPartC) {
+      for (const q of (unitPartC || [])) {
+        if (q.a && q.b) {
+          partCRows.push(new TableRow({ children: [createCell(`${q.qNo}.a.`, 8), createCell(q.a.question, 64, false, AlignmentType.LEFT), createCell(q.a.marks || "14", 8), createCell(q.a.co || "CO1", 10), createCell(q.a.kLevel || "K4", 10)] }));
+          if (q.a.image) { const imgRow = await makeImageRow(q.a.image, 210, 176); if (imgRow) partCRows.push(imgRow); }
+          partCRows.push(new TableRow({ children: [createCell("", 8), createCell("(OR)", 64, true, AlignmentType.CENTER), createCell("", 8), createCell("", 10), createCell("", 10)] }));
+          partCRows.push(new TableRow({ children: [createCell(`${q.qNo}.b.`, 8), createCell(q.b.question, 64, false, AlignmentType.LEFT), createCell(q.b.marks || "14", 8), createCell(q.b.co || "CO1", 10), createCell(q.b.kLevel || "K4", 10)] }));
+          if (q.b.image) { const imgRow = await makeImageRow(q.b.image, 210, 176); if (imgRow) partCRows.push(imgRow); }
+        } else {
+          partCRows.push(new TableRow({ children: [createCell(q.qNo, 5), createCell(q.question, 67, false, AlignmentType.LEFT), createCell(q.marks, 8), createCell(q.co, 10), createCell(q.kLevel, 10)] }));
+          if (q.image) { const imgRow = await makeImageRow(q.image, 210, 176); if (imgRow) partCRows.push(imgRow); }
+        }
       }
-    });
+    }
+
+    const docChildren = [
+      new Table({
+        width: { size: 100, type: WidthType.PERCENTAGE },
+        borders: noBorders,
+        rows: [
+          new TableRow({
+            children: [
+              new TableCell({
+                width: { size: 50, type: WidthType.PERCENTAGE },
+                children: [
+                  new Paragraph({
+                    children: [
+                      new TextRun({ text: "Question Paper Code   ", bold: true, size: 18 }),
+                      new TextRun({ text: unitHeader.qpCode || "___________", underline: {}, size: 18 })
+                    ]
+                  })
+                ]
+              }),
+              new TableCell({
+                width: { size: 50, type: WidthType.PERCENTAGE },
+                children: [
+                  new Paragraph({
+                    alignment: AlignmentType.RIGHT,
+                    children: [
+                      new TextRun({ text: "Register No  ", bold: true, size: 18 }),
+                      new TextRun({ text: "  | | | | | | | | | | | |  ", underline: {}, size: 18 })
+                    ]
+                  })
+                ]
+              })
+            ]
+          })
+        ]
+      }),
+      new Paragraph({ text: " ", spacing: { after: 100 } }),
+      new Paragraph({ children: [new TextRun({ text: "St. PETER’S COLLEGE OF ENGINEERING AND TECHNOLOGY", bold: true, size: 22 })], alignment: AlignmentType.CENTER }),
+      new Paragraph({ children: [new TextRun({ text: "(An Autonomous Institution)", size: 18 })], alignment: AlignmentType.CENTER }),
+      new Paragraph({ children: [new TextRun({ text: "AVADI, CHENNAI 600 054", size: 18 })], alignment: AlignmentType.CENTER }),
+      new Paragraph({ children: [new TextRun({ text: unitHeader.examSession || "CONTINUOUS INTERNAL ASSESSMENT July 2026", bold: true, size: 20 })], alignment: AlignmentType.CENTER, spacing: { before: 50 } }),
+      new Paragraph({ children: [new TextRun({ text: unitHeader.semesterWord || "FIFTH SEMESTER", bold: true, size: 20 })], alignment: AlignmentType.CENTER }),
+      new Paragraph({ children: [new TextRun({ text: unitHeader.ciaOption || "CIA - 1", bold: true, size: 20 })], alignment: AlignmentType.CENTER }),
+      new Paragraph({ children: [new TextRun({ text: unitHeader.department || "", size: 20 })], alignment: AlignmentType.CENTER }),
+      ...(unitHeader.commonBranches && unitHeader.commonBranches.trim() ? [
+        new Paragraph({ children: [new TextRun({ text: `Common to Branches ${unitHeader.commonBranches.trim()}`, size: 18 })], alignment: AlignmentType.CENTER })
+      ] : []),
+      new Paragraph({ children: [new TextRun({ text: unitHeader.subject || "", bold: true, size: 22 })], alignment: AlignmentType.CENTER }),
+      new Paragraph({ children: [new TextRun({ text: unitHeader.regulations || "(Regulations 2024)", size: 18 })], alignment: AlignmentType.CENTER }),
+      new Paragraph({ text: " ", spacing: { after: 100 } }),
+      new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: noBorders, rows: [new TableRow({ children: [new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Duration: " + (unitHeader.duration || "2:00 hours"), bold: true, size: 18 })] })] }), new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Max. Marks: " + (unitHeader.maxMarks || "50"), bold: true, size: 18 })], alignment: AlignmentType.RIGHT })] })] })] }),
+      new Paragraph({ children: [new TextRun({ text: "Answer ALL Questions", bold: true, size: 20 })], alignment: AlignmentType.CENTER, spacing: { before: 150, after: 150 } }),
+      new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: noBorders, rows: [new TableRow({ children: [new TableCell({ columnSpan: 2, children: [new Paragraph({ children: [new TextRun({ text: "PART-A (5 × 2 = 10 Marks)", bold: true, size: 19 })], alignment: AlignmentType.CENTER, spacing: { before: 150, after: 150 } })] }), createCell("Marks", 8, true), createCell("CO", 10, true), createCell("K-Level", 10, true)] }), ...partARows]}),
+      new Paragraph({ text: " ", spacing: { after: 150 } }),
+      new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: noBorders, rows: [new TableRow({ children: [new TableCell({ columnSpan: 2, children: [new Paragraph({ children: [new TextRun({ text: "PART-B " + (is2024 ? "(2 × 16 + 1 × 08 = 40 Marks)" : "(2 × 13 = 26 Marks)"), bold: true, size: 19 })], alignment: AlignmentType.CENTER, spacing: { before: 150, after: 150 } })] }), createCell("Marks", 8, true), createCell("CO", 10, true), createCell("K-Level", 10, true)] }), ...partBRows]}),
+    ];
+
+    if (!is2024 && partCRows.length > 0) {
+      docChildren.push(
+        new Paragraph({ text: " ", spacing: { after: 150 } }),
+        new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: noBorders, rows: [new TableRow({ children: [new TableCell({ columnSpan: 2, children: [new Paragraph({ children: [new TextRun({ text: "PART-C (1 × 14 = 14 Marks)", bold: true, size: 19 })], alignment: AlignmentType.CENTER, spacing: { before: 150, after: 150 } })] }), createCell("Marks", 8, true), createCell("CO", 10, true), createCell("K-Level", 10, true)] }), ...partCRows]})
+      );
+    }
+
+    docChildren.push(
+      new Paragraph({ text: " ", spacing: { after: 150 } }),
+      new Table({ 
+        width: { size: 100, type: WidthType.PERCENTAGE }, 
+        borders: { top: { style: BorderStyle.SINGLE, size: 1 }, bottom: { style: BorderStyle.SINGLE, size: 1 }, left: { style: BorderStyle.SINGLE, size: 1 }, right: { style: BorderStyle.SINGLE, size: 1 }, insideHorizontal: { style: BorderStyle.SINGLE, size: 1 }, insideVertical: { style: BorderStyle.SINGLE, size: 1 } }, 
+        rows: [
+          new TableRow({ children: [new TableCell({ columnSpan: 7, children: [new Paragraph({ children: [new TextRun({ text: "Distribution of CO's (Percentage wise)", bold: true, size: 18 })], alignment: AlignmentType.CENTER, spacing: { before: 150, after: 150 } })] })] }),
+          new TableRow({ children: [createCell("Evaluation", 16, true), createCell("CO1", 14, true), createCell("CO2", 14, true), createCell("CO3", 14, true), createCell("CO4", 14, true), createCell("CO5", 14, true), createCell("CO6", 14, true)] }),
+          new TableRow({ children: [createCell("Marks", 16, true), createCell(marksArray[0], 14), createCell(marksArray[1], 14), createCell(marksArray[2], 14), createCell(marksArray[3], 14), createCell(marksArray[4], 14), createCell(marksArray[5], 14)] }),
+          new TableRow({ children: [createCell("%", 16, true), createCell(percArray[0], 14), createCell(percArray[1], 14), createCell(percArray[2], 14), createCell(percArray[3], 14), createCell(percArray[4], 14), createCell(percArray[5], 14)] })
+        ]
+      })
+    );
 
     const doc = new Document({
       sections: [{
         footers: { default: new Footer({ children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: "Knowledge Level: K1 – Remember; K2 – Understand; K3 – Apply; K4 – Analyze; K5 – Evaluate; K6 – Create", size: 16, color: "555555" })] }), new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: "Page ", size: 16, color: "555555" }), new TextRun({ children: [PageNumber.CURRENT], size: 16, color: "555555" }), new TextRun({ text: " of ", size: 16, color: "555555" }), new TextRun({ children: [PageNumber.TOTAL_PAGES], size: 16, color: "555555" })] })] }) },
-        children: [
-          new Table({ width: { size: 50, type: WidthType.PERCENTAGE }, alignment: AlignmentType.RIGHT, rows: [new TableRow({ children: [new TableCell({ width: { size: 40, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: "Reg. No.  ", bold: true })], alignment: AlignmentType.RIGHT, spacing: { before: 150, after: 150 } })], borders: { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } } }), ...regBoxCells] })] }),
-          new Paragraph({ text: " " }),
-          new Paragraph({ children: [new TextRun({ text: "Question Paper Code: __________________", bold: true })], alignment: AlignmentType.CENTER }),
-          new Paragraph({ text: " " }),
-          new Paragraph({ children: [new TextRun({ text: "ST. PETER’S COLLEGE OF ENGINEERING AND TECHNOLOGY", bold: true, size: 28 })], alignment: AlignmentType.CENTER }),
-          new Paragraph({ children: [new TextRun({ text: "AVADI, CHENNAI 600 054", bold: true, size: 22 })], alignment: AlignmentType.CENTER }),
-          new Paragraph({ children: [new TextRun({ text: unitHeader.examSession || "", bold: true })], alignment: AlignmentType.CENTER, spacing: { before: 100 } }),
-          new Paragraph({ children: [new TextRun({ text: unitHeader.semesterWord || "" })], alignment: AlignmentType.CENTER }),
-          new Paragraph({ children: [new TextRun({ text: unitHeader.department || "", bold: true })], alignment: AlignmentType.CENTER }),
-          new Paragraph({ children: [new TextRun({ text: unitHeader.subject || "", bold: true })], alignment: AlignmentType.CENTER }),
-          new Paragraph({ children: [new TextRun({ text: unitHeader.regulations || "", bold: true })], alignment: AlignmentType.CENTER }),
-          new Paragraph({ text: " ", spacing: { after: 100 } }),
-          new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: { top: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, insideHorizontal: { style: BorderStyle.NONE }, insideVertical: { style: BorderStyle.NONE } }, rows: [new TableRow({ children: [new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Duration: " + (unitHeader.duration || ""), bold: true })] })] }), new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Max. Marks " + (unitHeader.maxMarks || ""), bold: true })], alignment: AlignmentType.RIGHT })] })] })] }),
-          new Paragraph({ children: [new TextRun({ text: "Answer ALL Questions", bold: true })], alignment: AlignmentType.CENTER, spacing: { before: 150, after: 150 } }),
-          new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: noBorders, rows: [new TableRow({ children: [new TableCell({ columnSpan: 2, children: [new Paragraph({ children: [new TextRun({ text: "PART-A (5 x 2 = 10 Marks)", bold: true })], alignment: AlignmentType.CENTER, spacing: { before: 150, after: 150 } })] }), createCell("K-Level", 10, true), createCell("CO", 10, true)] }), ...partARows]}),
-          new Paragraph({ text: " ", spacing: { after: 150 } }),
-          new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: noBorders, rows: [new TableRow({ children: [new TableCell({ columnSpan: 2, children: [new Paragraph({ children: [new TextRun({ text: "PART - B (2 x 13 = 26 Marks)", bold: true })], alignment: AlignmentType.CENTER, spacing: { before: 150, after: 150 } })] }), createCell("Marks", 8, true), createCell("K-Level", 10, true), createCell("CO", 10, true)] }), ...partBRows]}),
-          new Paragraph({ text: " ", spacing: { after: 150 } }),
-          new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: noBorders, rows: [new TableRow({ children: [new TableCell({ columnSpan: 2, children: [new Paragraph({ children: [new TextRun({ text: "PART - C (1 x 14 = 14 marks)", bold: true })], alignment: AlignmentType.CENTER, spacing: { before: 150, after: 150 } })] }), createCell("Marks", 8, true), createCell("K-Level", 10, true), createCell("CO", 10, true)] }), ...partCRows]}),
-          new Paragraph({ text: " ", spacing: { after: 150 } }),
-          new Table({ 
-            width: { size: 100, type: WidthType.PERCENTAGE }, 
-            borders: { top: { style: BorderStyle.SINGLE, size: 1 }, bottom: { style: BorderStyle.SINGLE, size: 1 }, left: { style: BorderStyle.SINGLE, size: 1 }, right: { style: BorderStyle.SINGLE, size: 1 }, insideHorizontal: { style: BorderStyle.SINGLE, size: 1 }, insideVertical: { style: BorderStyle.SINGLE, size: 1 } }, 
-            rows: [
-              new TableRow({ children: [new TableCell({ columnSpan: 7, children: [new Paragraph({ children: [new TextRun({ text: "Distribution of COs (Percentage wise)", bold: true })], alignment: AlignmentType.CENTER, spacing: { before: 150, after: 150 } })] })] }),
-              new TableRow({ children: [createCell("Evaluation", 16, true), createCell("CO1", 14, true), createCell("CO2", 14, true), createCell("CO3", 14, true), createCell("CO4", 14, true), createCell("CO5", 14, true), createCell("CO6", 14, true)] }),
-              new TableRow({ children: [createCell("Marks", 16, true), createCell(marksArray[0], 14), createCell(marksArray[1], 14), createCell(marksArray[2], 14), createCell(marksArray[3], 14), createCell(marksArray[4], 14), createCell(marksArray[5], 14)] }),
-              new TableRow({ children: [createCell("%", 16, true), createCell(percArray[0], 14), createCell(percArray[1], 14), createCell(percArray[2], 14), createCell(percArray[3], 14), createCell(percArray[4], 14), createCell(percArray[5], 14)] })
-            ]
-          })
-        ],
+        children: docChildren
       }]
     });
 
