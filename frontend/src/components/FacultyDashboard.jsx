@@ -342,8 +342,20 @@ export default function FacultyDashboard({ user, onLogout }) {
         // Data contains questions for part B (Q6a/b, Q7a/b, Q8a/b)
         newPartB = unitPartB2024.map((item, i) => ({
           ...item,
-          a: { ...item.a, question: data.partB[i*2]?.question   || item.a.question, kLevel: data.partB[i*2]?.kLevel   || item.a.kLevel, co: data.partB[i*2]?.co   || defaultCo },
-          b: { ...item.b, question: data.partB[i*2+1]?.question || item.b.question, kLevel: data.partB[i*2+1]?.kLevel || item.b.kLevel, co: data.partB[i*2+1]?.co || defaultCo },
+          a: {
+            ...item.a,
+            question: data.partB[i*2]?.question   || item.a.question,
+            kLevel:   data.partB[i*2]?.kLevel   || item.a.kLevel,
+            co:       data.partB[i*2]?.co       || defaultCo,
+            marks:    data.partB[i*2]?.marks    ? String(data.partB[i*2].marks) : item.a.marks
+          },
+          b: {
+            ...item.b,
+            question: data.partB[i*2+1]?.question || item.b.question,
+            kLevel:   data.partB[i*2+1]?.kLevel || item.b.kLevel,
+            co:       data.partB[i*2+1]?.co     || defaultCo,
+            marks:    data.partB[i*2+1]?.marks  ? String(data.partB[i*2+1].marks) : item.b.marks
+          },
         }));
         setUnitPartB2024(newPartB);
       }

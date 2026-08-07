@@ -71,6 +71,7 @@ export default function AdminDashboard({ onLogout }) {
   // --- HALL TICKET STATE ---
   const [htDept, setHtDept] = useState("CSE");
   const [htSem, setHtSem] = useState("3");
+  const [htReg, setHtReg] = useState("ALL");
   const [htSession, setHtSession] = useState("November / December 2026");
   const [htCentre, setHtCentre] = useState("1127 : ST. PETER'S COLLEGE OF ENGINEERING AND TECHNOLOGY");
   const [htNotes, setHtNotes] = useState("1. This Hall Ticket is valid only if the candidate's admission is approved.\n2. Correction in Name/DOB/Photo should be reported immediately.\n3. Instructions printed overleaf must be strictly followed.");
@@ -78,6 +79,12 @@ export default function AdminDashboard({ onLogout }) {
   const [isGeneratingHT, setIsGeneratingHT] = useState(false);
   const [printSingleId, setPrintSingleId] = useState(null); 
   
+  // Hall Ticket Preview Filters
+  const [htFilterDept, setHtFilterDept] = useState("ALL");
+  const [htFilterSem, setHtFilterSem] = useState("ALL");
+  const [htFilterReg, setHtFilterReg] = useState("ALL");
+  const [htFilterSearch, setHtFilterSearch] = useState("");
+
   // ✅ NEW: CUSTOM DOCX TEMPLATE STATE
   const [htTemplateMode, setHtTemplateMode] = useState("STANDARD");
   const [customHtContent, setCustomHtContent] = useState("");
@@ -650,37 +657,71 @@ export default function AdminDashboard({ onLogout }) {
   };
 
   const handleGenerateHallTickets = async () => {
-     if(!htDept || !htSem) return alert("Select Dept and Semester");
      setIsGeneratingHT(true);
      setGeneratedTickets([]);
-     setMessage("🔍 Fetching subjects and student records...");
+     setMessage("🔍 Fetching student records...");
 
      try {
          const types = ["THEORY", "PRACTICAL", "INTEGRATED"];
-         let currentSemSubjects = [];
-         for(let t of types) {
-             const r = await fetch(`${API_BASE}/api/import/fetch-subjects?department=${htDept}&semester=${htSem}&paperType=${t}`);
-             if(r.ok) {
-                 const data = await r.json();
-                 currentSemSubjects = [...currentSemSubjects, ...data];
-             }
-         }
-
          const stdRes = await fetch(`${API_BASE}/api/import/logins`);
          if(!stdRes.ok) throw new Error("Could not fetch students");
          const allStudents = await stdRes.json();
-         const targetYear = Math.ceil(Number(htSem) / 2);
-         const targetStudents = allStudents.filter(u => u.department === htDept && (Number(u.year) || Math.ceil(Number(u.semester) / 2)) === targetYear && u.role === 'student');
+         
+         let targetStudents = allStudents.filter(u => u.role === 'student');
+
+         if (htDept !== "ALL") {
+             targetStudents = targetStudents.filter(u => u.department === htDept);
+         }
+
+         if (htSem !== "ALL") {
+             const targetYear = Math.ceil(Number(htSem) / 2);
+             targetStudents = targetStudents.filter(u => 
+                 (Number(u.semester) === Number(htSem)) ||
+                 (Number(u.year) === targetYear) ||
+                 (Math.ceil(Number(u.semester) / 2) === targetYear)
+             );
+         }
+
+         if (htReg !== "ALL") {
+             targetStudents = targetStudents.filter(u => {
+                 const studentReg = u.regulation || u.regulations || u.reg || (Number(u.semester || htSem) <= 4 ? "2024" : "2021");
+                 return String(studentReg).includes(htReg);
+             });
+         }
 
          if(targetStudents.length === 0) {
              setIsGeneratingHT(false);
-             return setMessage(`⚠️ No students found in ${htDept} Semester ${htSem}.`);
+             return setMessage(`⚠️ No students found matching the selected criteria.`);
          }
 
-         setMessage(`⚙️ Analyzing past arrears for ${targetStudents.length} students...`);
+         setMessage(`⚙️ Analyzing subjects and past arrears for ${targetStudents.length} students...`);
+
+         const subjectCache = {};
+         const getSubjectsForDeptSem = async (deptCode, semNum) => {
+             const key = `${deptCode}_${semNum}`;
+             if (subjectCache[key]) return subjectCache[key];
+             let subs = [];
+             for(let t of types) {
+                 try {
+                     const r = await fetch(`${API_BASE}/api/import/fetch-subjects?department=${encodeURIComponent(deptCode)}&semester=${semNum}&paperType=${t}`);
+                     if(r.ok) {
+                         const data = await r.json();
+                         subs = [...subs, ...data];
+                     }
+                 } catch(e) {}
+             }
+             subjectCache[key] = subs;
+             return subs;
+         };
 
          const tickets = [];
          for(let s of targetStudents) {
+             const sDept = s.department || (htDept !== "ALL" ? htDept : "CSE");
+             const sSem = s.semester ? String(s.semester) : (htSem !== "ALL" ? htSem : "1");
+             const sReg = s.regulation || s.regulations || s.reg || (Number(sSem) <= 4 ? "2024" : "2021");
+
+             let currentSemSubjects = await getSubjectsForDeptSem(sDept, sSem);
+
              let arrears = [];
              try {
                  const profRes = await fetch(`${API_BASE}/api/students/${s.registerNumber}/profile`);
@@ -689,7 +730,7 @@ export default function AdminDashboard({ onLogout }) {
                      const mergedResults = mergeResults(profData.results || []);
                      arrears = mergedResults.filter(r => 
                          ["U", "RA", "AB", "FAIL", "F", "ABSENT", "WH", "SA"].includes(r.grade?.toUpperCase()) 
-                         && Number(r.semester) !== Number(htSem)
+                         && Number(r.semester) !== Number(sSem)
                      );
                  }
              } catch(e) { console.warn(`Could not fetch profile for ${s.registerNumber}`); }
@@ -710,12 +751,19 @@ export default function AdminDashboard({ onLogout }) {
                      }
                  } else {
                      if (!studentSubjectsList.some(c => c.subjectCode === sub.subjectCode)) {
-                         studentSubjectsList.push({ subjectCode: sub.subjectCode, subjectName: sub.subjectName || sub.subjectCode, semester: sub.subjectSemester || htSem });
+                         studentSubjectsList.push({ subjectCode: sub.subjectCode, subjectName: sub.subjectName || sub.subjectCode, semester: sub.subjectSemester || sSem });
                      }
                  }
              });
 
-             tickets.push({ student: s, currentSubjects: studentSubjectsList, arrears: arrears });
+             tickets.push({ 
+                 student: { ...s, regulation: sReg }, 
+                 department: sDept,
+                 semester: sSem,
+                 regulation: sReg,
+                 currentSubjects: studentSubjectsList, 
+                 arrears: arrears 
+             });
          }
 
          setGeneratedTickets(tickets);
@@ -761,9 +809,29 @@ export default function AdminDashboard({ onLogout }) {
       }, 500);
   };
 
+  const handleClearHallTickets = () => {
+      setGeneratedTickets([]);
+      setHtFilterDept("ALL");
+      setHtFilterSem("ALL");
+      setHtFilterReg("ALL");
+      setHtFilterSearch("");
+      setMessage("🗑️ Hall ticket preview data cleared.");
+  };
+
+  const filteredTickets = generatedTickets.filter(t => {
+      const matchDept = htFilterDept === "ALL" || t.department === htFilterDept || t.student.department === htFilterDept;
+      const matchSem = htFilterSem === "ALL" || String(t.semester) === String(htFilterSem) || String(t.student.semester) === String(htFilterSem);
+      const matchReg = htFilterReg === "ALL" || String(t.regulation || t.student.regulation || "").includes(htFilterReg);
+      const search = htFilterSearch.trim().toLowerCase();
+      const matchSearch = !search || 
+          (t.student.registerNumber || "").toLowerCase().includes(search) || 
+          (t.student.name || "").toLowerCase().includes(search);
+      return matchDept && matchSem && matchReg && matchSearch;
+  });
+
   const ticketsToRender = printSingleId 
         ? generatedTickets.filter(t => t.student.registerNumber === printSingleId)
-        : generatedTickets;
+        : filteredTickets;
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-gray-800">
@@ -1296,9 +1364,30 @@ export default function AdminDashboard({ onLogout }) {
                     <h2 className="text-xl font-bold text-pink-800">Automated Hall Ticket Generator</h2>
                     <span className="bg-pink-200 text-pink-800 text-xs font-bold px-3 py-1 rounded shadow-sm">With Arrear Support</span>
                  </div>
-                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-                    <div><label className="block text-xs font-bold text-pink-700 uppercase mb-2">Target Dept</label><select value={htDept} onChange={(e) => setHtDept(e.target.value)} className="w-full p-2.5 border border-pink-300 rounded-lg font-bold text-gray-700 bg-white outline-none focus:ring-2 focus:ring-pink-500">{DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}</select></div>
-                    <div><label className="block text-xs font-bold text-pink-700 uppercase mb-2">Semester</label><select value={htSem} onChange={(e) => setHtSem(e.target.value)} className="w-full p-2.5 border border-pink-300 rounded-lg font-bold text-gray-700 bg-white outline-none focus:ring-2 focus:ring-pink-500">{[1, 2, 3, 4, 5, 6, 7, 8].map(n => <option key={n} value={n}>{`Semester ${n}`}</option>)}</select></div>
+                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                    <div>
+                      <label className="block text-xs font-bold text-pink-700 uppercase mb-2">Target Dept</label>
+                      <select value={htDept} onChange={(e) => setHtDept(e.target.value)} className="w-full p-2.5 border border-pink-300 rounded-lg font-bold text-gray-700 bg-white outline-none focus:ring-2 focus:ring-pink-500">
+                         <option value="ALL">ALL DEPARTMENTS</option>
+                         {DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-pink-700 uppercase mb-2">Semester</label>
+                      <select value={htSem} onChange={(e) => setHtSem(e.target.value)} className="w-full p-2.5 border border-pink-300 rounded-lg font-bold text-gray-700 bg-white outline-none focus:ring-2 focus:ring-pink-500">
+                         <option value="ALL">ALL SEMESTERS</option>
+                         {[1, 2, 3, 4, 5, 6, 7, 8].map(n => <option key={n} value={String(n)}>{`Semester ${n}`}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-pink-700 uppercase mb-2">Regulation</label>
+                      <select value={htReg} onChange={(e) => setHtReg(e.target.value)} className="w-full p-2.5 border border-pink-300 rounded-lg font-bold text-gray-700 bg-white outline-none focus:ring-2 focus:ring-pink-500">
+                         <option value="ALL">ALL REGULATIONS</option>
+                         <option value="2024">Regulation 2024</option>
+                         <option value="2021">Regulation 2021</option>
+                         <option value="2017">Regulation 2017</option>
+                      </select>
+                    </div>
                  </div>
                  <button onClick={handleGenerateHallTickets} disabled={isGeneratingHT} className="w-full bg-pink-600 hover:bg-pink-700 text-white font-bold py-3 rounded-lg shadow-md transition-colors active:scale-95 flex justify-center items-center gap-2 disabled:bg-gray-400">
                     <span>{isGeneratingHT ? "⚙️" : "🖨️"}</span> {isGeneratingHT ? "Generating Tickets..." : "Generate Preview Data"}
@@ -1335,52 +1424,108 @@ export default function AdminDashboard({ onLogout }) {
                  )}
               </div>
 
-              {/* Preview Table */}
+              {/* Preview Table with Filters & Clear Button */}
               {generatedTickets.length > 0 && (
                  <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-                    <div className="px-6 py-4 border-b border-gray-100 bg-gray-50 flex justify-between items-center">
-                       <h3 className="font-bold text-gray-700">Preview: {generatedTickets.length} Students</h3>
-                       <div className="flex gap-2">
-                          <button onClick={() => exportHallTicketsDocx(generatedTickets, { session: htSession, centre: htCentre, notes: htNotes, sem: htSem }, htDept)} className="bg-blue-600 text-white font-bold py-2 px-4 rounded shadow-sm hover:bg-blue-700 transition-colors">
-                             📄 Download All (DOCX)
-                          </button>
-                          <button onClick={() => window.print()} className="bg-gray-800 text-white font-bold py-2 px-4 rounded shadow-sm hover:bg-gray-900 transition-colors">
-                             🖨️ Print All to PDF
-                          </button>
+                    <div className="p-4 border-b border-gray-100 bg-gray-50 flex flex-col gap-4">
+                       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                          <div>
+                             <h3 className="font-bold text-gray-800 text-base">Preview Hall Tickets</h3>
+                             <p className="text-xs text-gray-500 font-medium mt-0.5">
+                                Showing {filteredTickets.length} of {generatedTickets.length} fetched student tickets
+                             </p>
+                          </div>
+                          <div className="flex flex-wrap gap-2 items-center">
+                             <button onClick={() => exportHallTicketsDocx(filteredTickets, { session: htSession, centre: htCentre, notes: htNotes, sem: htSem }, htDept)} className="bg-blue-600 text-white font-bold py-1.5 px-3.5 rounded-lg shadow-sm hover:bg-blue-700 transition-colors text-xs flex items-center gap-1.5">
+                                📄 Download (DOCX)
+                             </button>
+                             <button onClick={() => window.print()} className="bg-gray-800 text-white font-bold py-1.5 px-3.5 rounded-lg shadow-sm hover:bg-gray-900 transition-colors text-xs flex items-center gap-1.5">
+                                🖨️ Print All to PDF
+                             </button>
+                             <button onClick={handleClearHallTickets} className="bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 font-bold py-1.5 px-3.5 rounded-lg transition-colors text-xs flex items-center gap-1.5 shadow-sm active:scale-95">
+                                🗑️ Clear Data
+                             </button>
+                          </div>
+                       </div>
+
+                       {/* PREVIEW FILTER OPTIONS */}
+                       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 bg-white p-3 rounded-lg border border-gray-200 shadow-inner">
+                          <div>
+                             <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">Filter Dept</label>
+                             <select value={htFilterDept} onChange={e => setHtFilterDept(e.target.value)} className="w-full p-2 border border-gray-300 rounded text-xs font-bold text-gray-700 bg-white outline-none focus:ring-2 focus:ring-pink-500">
+                                <option value="ALL">All Departments ({generatedTickets.length})</option>
+                                {DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}
+                             </select>
+                          </div>
+                          <div>
+                             <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">Filter Semester</label>
+                             <select value={htFilterSem} onChange={e => setHtFilterSem(e.target.value)} className="w-full p-2 border border-gray-300 rounded text-xs font-bold text-gray-700 bg-white outline-none focus:ring-2 focus:ring-pink-500">
+                                <option value="ALL">All Semesters</option>
+                                {[1,2,3,4,5,6,7,8].map(n => <option key={n} value={String(n)}>{`Semester ${n}`}</option>)}
+                             </select>
+                          </div>
+                          <div>
+                             <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">Filter Regulation</label>
+                             <select value={htFilterReg} onChange={e => setHtFilterReg(e.target.value)} className="w-full p-2 border border-gray-300 rounded text-xs font-bold text-gray-700 bg-white outline-none focus:ring-2 focus:ring-pink-500">
+                                <option value="ALL">All Regulations</option>
+                                <option value="2024">Regulation 2024</option>
+                                <option value="2021">Regulation 2021</option>
+                                <option value="2017">Regulation 2017</option>
+                             </select>
+                          </div>
+                          <div>
+                             <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">Search Student</label>
+                             <input type="text" value={htFilterSearch} onChange={e => setHtFilterSearch(e.target.value)} placeholder="Reg No or Name..." className="w-full p-2 border border-gray-300 rounded text-xs outline-none focus:ring-2 focus:ring-pink-500 font-medium" />
+                          </div>
                        </div>
                     </div>
+
                     <div className="max-h-[500px] overflow-y-auto">
                        <table className="w-full text-sm text-left">
                           <thead className="bg-gray-100 text-gray-600 uppercase text-xs font-bold sticky top-0 z-10">
                              <tr>
                                 <th className="px-4 py-3">Register No</th>
                                 <th className="px-4 py-3">Name</th>
+                                <th className="px-4 py-3 text-center">Dept</th>
+                                <th className="px-4 py-3 text-center">Sem</th>
+                                <th className="px-4 py-3 text-center">Regulation</th>
                                 <th className="px-4 py-3 text-center">Subjects</th>
                                 <th className="px-4 py-3 text-center">Arrears</th>
                                 <th className="px-4 py-3 text-center">Actions</th>
                              </tr>
                           </thead>
                           <tbody className="divide-y divide-gray-100">
-                             {generatedTickets.map((t, i) => (
-                                <tr key={i} className="hover:bg-gray-50">
-                                   <td className="px-4 py-3 font-mono font-bold text-gray-800">{t.student.registerNumber}</td>
-                                   <td className="px-4 py-3 text-gray-600 font-medium">{t.student.name}</td>
-                                   <td className="px-4 py-3 text-center font-bold text-blue-600">{t.currentSubjects.length}</td>
-                                   <td className="px-4 py-3 text-center">
-                                      <span className={`px-2 py-1 rounded text-xs font-bold ${t.arrears.length > 0 ? "bg-red-100 text-red-700" : "bg-green-100 text-green-700"}`}>{t.arrears.length}</span>
-                                   </td>
-                                   <td className="px-4 py-3 flex justify-center gap-2">
-                                      <button 
-                                         onClick={() => printIndividualTicket(t.student.registerNumber)}
-                                         className="bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-300 font-bold py-1 px-3 rounded text-xs transition-colors"
-                                      >Print</button>
-                                      <button 
-                                         onClick={() => exportHallTicketsDocx([t], { session: htSession, centre: htCentre, notes: htNotes, sem: htSem }, htDept)}
-                                         className="bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 font-bold py-1 px-3 rounded text-xs transition-colors"
-                                      >Docx</button>
+                             {filteredTickets.length === 0 ? (
+                                <tr>
+                                   <td colSpan="8" className="px-4 py-8 text-center text-gray-400 font-semibold">
+                                      No student tickets match the selected filter criteria.
                                    </td>
                                 </tr>
-                             ))}
+                             ) : (
+                                filteredTickets.map((t, i) => (
+                                   <tr key={i} className="hover:bg-gray-50">
+                                      <td className="px-4 py-3 font-mono font-bold text-gray-800">{t.student.registerNumber}</td>
+                                      <td className="px-4 py-3 text-gray-600 font-medium">{t.student.name}</td>
+                                      <td className="px-4 py-3 text-center font-bold text-xs"><span className="bg-gray-100 text-gray-700 px-2 py-0.5 rounded">{t.department}</span></td>
+                                      <td className="px-4 py-3 text-center font-bold text-xs">Sem {t.semester}</td>
+                                      <td className="px-4 py-3 text-center font-bold text-xs"><span className="bg-pink-50 text-pink-700 border border-pink-200 px-2 py-0.5 rounded">{t.regulation}</span></td>
+                                      <td className="px-4 py-3 text-center font-bold text-blue-600">{t.currentSubjects.length}</td>
+                                      <td className="px-4 py-3 text-center">
+                                         <span className={`px-2 py-1 rounded text-xs font-bold ${t.arrears.length > 0 ? "bg-red-100 text-red-700" : "bg-green-100 text-green-700"}`}>{t.arrears.length}</span>
+                                      </td>
+                                      <td className="px-4 py-3 flex justify-center gap-2">
+                                         <button 
+                                            onClick={() => printIndividualTicket(t.student.registerNumber)}
+                                            className="bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-300 font-bold py-1 px-3 rounded text-xs transition-colors"
+                                         >Print</button>
+                                         <button 
+                                            onClick={() => exportHallTicketsDocx([t], { session: htSession, centre: htCentre, notes: htNotes, sem: t.semester }, t.department)}
+                                            className="bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 font-bold py-1 px-3 rounded text-xs transition-colors"
+                                         >Docx</button>
+                                      </td>
+                                   </tr>
+                                ))
+                             )}
                           </tbody>
                        </table>
                     </div>

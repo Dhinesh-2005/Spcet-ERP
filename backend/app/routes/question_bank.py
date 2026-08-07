@@ -59,7 +59,7 @@ def _normalize_part(part_str: str, marks_val: float) -> str:
     
     if marks_val <= 2:
         return "A"
-    elif marks_val >= 13:
+    elif marks_val >= 5:
         return "B"
     return "A"
 
@@ -288,31 +288,48 @@ async def parse_and_generate_paper(
         }
         all_questions.append(doc)
 
-    part_a = [q for q in all_questions if q["part"] == "A"]
-    part_b = [q for q in all_questions if q["part"] == "B"]
-    part_c = [q for q in all_questions if q["part"] == "C"]
+    part_a = [q for q in all_questions if q["part"] == "A" or q["marks"] <= 2]
+    part_b_all = [q for q in all_questions if q["part"] == "B" or q["marks"] > 2]
+    part_c_all = [q for q in all_questions if q["part"] == "C"]
 
-    # Fallback logic if part classification is sparse
-    if not part_a and not part_b:
-        part_a = [q for q in all_questions if q["marks"] <= 2]
-        part_b = [q for q in all_questions if q["marks"] > 2]
+    b_16 = [q for q in part_b_all if q["marks"] >= 12]
+    b_8 = [q for q in part_b_all if 5 <= q["marks"] < 12]
 
     random.shuffle(part_a)
-    random.shuffle(part_b)
-    random.shuffle(part_c)
+    random.shuffle(part_b_all)
+    random.shuffle(b_16)
+    random.shuffle(b_8)
+    random.shuffle(part_c_all)
 
+    # For Regulation 2024:
+    # Q6 (16m): 2 questions (Q6a, Q6b)
+    # Q7 (16m): 2 questions (Q7a, Q7b)
+    # Q8 (8m):  2 questions (Q8a, Q8b)
+    selected_16 = b_16[:4]
+    if len(selected_16) < 4:
+        used = {id(q) for q in selected_16}
+        rem = [q for q in part_b_all if id(q) not in used]
+        selected_16.extend(rem[: 4 - len(selected_16)])
+
+    used_16 = {id(q) for q in selected_16}
+    selected_8 = [q for q in b_8 if id(q) not in used_16][:2]
+    if len(selected_8) < 2:
+        rem = [q for q in part_b_all if id(q) not in used_16]
+        selected_8.extend(rem[: 2 - len(selected_8)])
+
+    selected_part_b = selected_16 + selected_8
     selected_part_a = part_a[:5]
-    selected_part_b = part_b[:4]
-    
-    if len(part_c) >= 2:
-        selected_part_c = part_c[:2]
+
+    if len(part_c_all) >= 2:
+        selected_part_c = part_c_all[:2]
     else:
-        leftover_b = part_b[4:]
-        selected_part_c = (part_c + leftover_b)[:2]
+        used_b = {id(q) for q in selected_part_b}
+        leftover_b = [q for q in part_b_all if id(q) not in used_b]
+        selected_part_c = (part_c_all + leftover_b)[:2]
 
     warning = None
-    if len(part_a) < 5 or len(part_b) < 4:
-        warning = f"Notice: Excel provided {len(part_a)} Part A and {len(part_b)} Part B questions for {unit}."
+    if len(part_a) < 5 or len(part_b_all) < 6:
+        warning = f"Notice: Excel provided {len(part_a)} Part A and {len(part_b_all)} Part B questions for {unit}."
 
     return {
         "unit": unit,
