@@ -394,128 +394,145 @@ async def promote_students(department: str, currentSemester: int):
     return {"message": f"✅ Promoted {promoted_count} students. 🎓 Graduated {graduated_count} students!"}
 
 @router.post("/internal-upload")
-async def upload_internal_file(file: UploadFile = File(...), subjectCode: str = Form(...), department: str = Form(...)):
-    subject = await db.subjects.find_one({"subjectCode": subjectCode, "department": department})
+async def upload_internal_file(file: UploadFile = File(...), subjectCode: str = Form(...), department: str = Form("CSE")):
+    query = {"subjectCode": subjectCode.strip().upper()}
+    if department and department.upper() != "ALL":
+        query["department"] = department.strip().upper()
+    subject = await db.subjects.find_one(query)
     if not subject:
-        raise HTTPException(status_code=400, detail={"error": f"Subject not found: {subjectCode} for department {department}"})
+        subject = await db.subjects.find_one({"subjectCode": subjectCode.strip().upper()})
+    if not subject:
+        subject = {"paperType": "THEORY"}
 
     content = await file.read()
     import openpyxl
 
     workbook = openpyxl.load_workbook(filename=BytesIO(content), data_only=True)
-    sheet = workbook.active
-    rows = list(sheet.iter_rows(values_only=True))
-
-    anchor_row_idx = -1
-    for idx, row in enumerate(rows[:50]):
-        if not row:
-            continue
-        for cell in row:
-            if _clean_string(cell).find("registernumber") != -1 or _clean_string(cell).find("regno") != -1:
-                anchor_row_idx = idx
-                break
-        if anchor_row_idx != -1:
-            break
-
-    if anchor_row_idx == -1:
-        raise HTTPException(status_code=400, detail={"error": "Register Number header not found"})
-
-    main_header = list(rows[anchor_row_idx] or [])
-    sub_header = list(rows[anchor_row_idx + 1] or []) if anchor_row_idx + 1 < len(rows) else []
-
-    reg_no_idx = _find_column_index(main_header, ["registernumber", "regno"])
-    if reg_no_idx == -1:
-        raise HTTPException(status_code=400, detail={"error": "Register Number column not found"})
-
-    ut_indexes: List[int] = []
-    _scan_for_ut(sub_header, ut_indexes)
-    _scan_for_ut(main_header, ut_indexes)
-
-    exp_indexes: List[int] = []
-    _scan_for_prefix(sub_header, "ex", exp_indexes)
-    _scan_for_prefix(main_header, "ex", exp_indexes)
-
-    marks40_idx = _find_column_index(sub_header, ["marks40", "theoryseminarscore", "rubrics", "seminar"])
-    if marks40_idx == -1:
-        marks40_idx = _find_column_index(main_header, ["marks40", "theoryseminarscore", "rubrics", "seminar"])
-
-    model_idx = _find_column_index(sub_header, ["025", "25", "model"])
-    if model_idx == -1:
-        model_idx = _find_column_index(main_header, ["025", "25", "model"])
-
     processed_count = 0
-    start_data_row = anchor_row_idx + 2
-    for row_idx in range(start_data_row, len(rows)):
-        row = rows[row_idx]
-        if not row or reg_no_idx >= len(row):
+
+    for sheet in workbook.worksheets:
+        rows = list(sheet.iter_rows(values_only=True))
+        if not rows:
             continue
 
-        reg_no = str(_get_cell_value(row[reg_no_idx])).strip()
-        if len(reg_no) < 5 or "sample" in reg_no.lower():
+        anchor_row_idx = -1
+        for idx, row in enumerate(rows[:50]):
+            if not row:
+                continue
+            for cell in row:
+                if _clean_string(cell).find("registernumber") != -1 or _clean_string(cell).find("regno") != -1:
+                    anchor_row_idx = idx
+                    break
+            if anchor_row_idx != -1:
+                break
+
+        if anchor_row_idx == -1:
             continue
 
-        theory_part = 0.0
-        practical_part = 0.0
-        theory_ut_score = 0.0
-        theory_seminar_score = 0.0
-        practical_exp_score = 0.0
-        practical_model_score = 0.0
+        main_header = list(rows[anchor_row_idx] or [])
+        sub_header = list(rows[anchor_row_idx + 1] or []) if anchor_row_idx + 1 < len(rows) else []
 
-        paper_type = (subject.get("paperType") or "THEORY").upper()
-        if paper_type != "PRACTICAL":
-            ut_sum = 0.0
-            for idx in ut_indexes:
-                if idx < len(row):
-                    ut_sum += _get_numeric_value(row[idx])
-            divisor = len(ut_indexes) if ut_indexes else 1.0
-            ut_avg = ut_sum / divisor
-            theory_ut_score = ut_avg * 0.6
-            if marks40_idx != -1 and marks40_idx < len(row):
-                theory_seminar_score = _get_numeric_value(row[marks40_idx])
-            theory_part = theory_ut_score + theory_seminar_score
+        reg_no_idx = _find_column_index(main_header, ["registernumber", "regno"])
+        if reg_no_idx == -1:
+            continue
 
-        if paper_type != "THEORY":
-            exp_sum = 0.0
-            for idx in exp_indexes:
-                if idx < len(row):
-                    exp_sum += _get_numeric_value(row[idx])
-            exp_avg = exp_sum / len(exp_indexes) if exp_indexes else 0.0
-            if exp_avg > 0 and exp_avg <= 20:
-                exp_avg = exp_avg * 10
-            practical_exp_score = exp_avg * 0.75
-            practical_model_score = _get_numeric_value(row[model_idx]) if model_idx != -1 and model_idx < len(row) else 0.0
-            practical_part = practical_exp_score + practical_model_score
+        ut_indexes: List[int] = []
+        _scan_for_ut(sub_header, ut_indexes)
+        _scan_for_ut(main_header, ut_indexes)
 
-        if paper_type == "THEORY":
-            final_internal = theory_part
-        elif paper_type == "PRACTICAL":
-            final_internal = practical_part
-        else:
-            final_internal = (theory_part + practical_part) / 2.0
+        exp_indexes: List[int] = []
+        _scan_for_prefix(sub_header, "ex", exp_indexes)
+        _scan_for_prefix(main_header, "ex", exp_indexes)
 
-        payload = {
-            "registerNumber": reg_no,
-            "subjectCode": subjectCode,
-            "theoryUtScore": theory_ut_score,
-            "theorySeminarScore": theory_seminar_score,
-            "practicalExpScore": practical_exp_score,
-            "practicalModelScore": practical_model_score,
-            "finalInternal": final_internal,
-        }
-        await db.internals.update_one(
-            {"registerNumber": reg_no, "subjectCode": subjectCode},
-            {"$set": payload},
-            upsert=True,
-        )
-        processed_count += 1
+        marks40_idx = _find_column_index(sub_header, ["marks40", "theoryseminarscore", "rubrics", "seminar"])
+        if marks40_idx == -1:
+            marks40_idx = _find_column_index(main_header, ["marks40", "theoryseminarscore", "rubrics", "seminar"])
+
+        model_idx = _find_column_index(sub_header, ["025", "25", "model"])
+        if model_idx == -1:
+            model_idx = _find_column_index(main_header, ["025", "25", "model"])
+
+        start_data_row = anchor_row_idx + 2
+        for row_idx in range(start_data_row, len(rows)):
+            row = rows[row_idx]
+            if not row or reg_no_idx >= len(row):
+                continue
+
+            reg_no = str(_get_cell_value(row[reg_no_idx])).strip()
+            if len(reg_no) < 5 or "sample" in reg_no.lower():
+                continue
+
+            theory_part = 0.0
+            practical_part = 0.0
+            theory_ut_score = 0.0
+            theory_seminar_score = 0.0
+            practical_exp_score = 0.0
+            practical_model_score = 0.0
+
+            paper_type = (subject.get("paperType") or "THEORY").upper()
+            if paper_type != "PRACTICAL":
+                ut_sum = 0.0
+                for idx in ut_indexes:
+                    if idx < len(row):
+                        ut_sum += _get_numeric_value(row[idx])
+                divisor = len(ut_indexes) if ut_indexes else 1.0
+                ut_avg = ut_sum / divisor
+                theory_ut_score = ut_avg * 0.6
+                if marks40_idx != -1 and marks40_idx < len(row):
+                    theory_seminar_score = _get_numeric_value(row[marks40_idx])
+                theory_part = theory_ut_score + theory_seminar_score
+
+            if paper_type != "THEORY":
+                exp_sum = 0.0
+                for idx in exp_indexes:
+                    if idx < len(row):
+                        exp_sum += _get_numeric_value(row[idx])
+                exp_avg = exp_sum / len(exp_indexes) if exp_indexes else 0.0
+                if exp_avg > 0 and exp_avg <= 20:
+                    exp_avg = exp_avg * 10
+                practical_exp_score = exp_avg * 0.75
+                practical_model_score = _get_numeric_value(row[model_idx]) if model_idx != -1 and model_idx < len(row) else 0.0
+                practical_part = practical_exp_score + practical_model_score
+
+            if paper_type == "THEORY":
+                final_internal = theory_part
+            elif paper_type == "PRACTICAL":
+                final_internal = practical_part
+            else:
+                final_internal = (theory_part + practical_part) / 2.0
+
+            payload = {
+                "registerNumber": reg_no,
+                "subjectCode": subjectCode,
+                "theoryUtScore": theory_ut_score,
+                "theorySeminarScore": theory_seminar_score,
+                "practicalExpScore": practical_exp_score,
+                "practicalModelScore": practical_model_score,
+                "finalInternal": final_internal,
+            }
+            await db.internals.update_one(
+                {"registerNumber": reg_no, "subjectCode": subjectCode},
+                {"$set": payload},
+                upsert=True,
+            )
+            processed_count += 1
+
+    if processed_count == 0:
+        raise HTTPException(status_code=400, detail={"error": "No valid student register numbers found in the Excel sheets"})
 
     return {"message": f"Internal marks processed for {subjectCode}", "count": processed_count}
 
 @router.get("/fetch-subjects")
-async def fetch_subjects(department: str, semester: int, paperType: str = None):
-    query = {"department": {"$regex": f"^{department.strip()}$", "$options": "i"}, "semester": int(semester)}
-    if paperType:
+async def fetch_subjects(department: str = None, semester: Any = None, paperType: str = None, regulation: str = None):
+    query = {}
+    if department and department.upper() != "ALL":
+        query["department"] = {"$regex": f"^{department.strip()}$", "$options": "i"}
+    if semester is not None and str(semester).upper() != "ALL" and int(semester) != 0:
+        query["semester"] = int(semester)
+    if paperType and paperType.upper() != "ALL":
         query["paperType"] = paperType
+    if regulation and regulation.upper() != "ALL":
+        query["regulation"] = {"$regex": f"^{regulation.strip()}$", "$options": "i"}
     return [clean_doc(doc) async for doc in db.subjects.find(query)]
 
 @router.get("/all-subjects")
@@ -524,6 +541,7 @@ async def get_all_subjects(
     semester: int = None,
     subjectCode: str = None,
     subjectName: str = None,
+    regulation: str = None,
 ):
     """Return subjects with optional filters for the Setup module subject browser."""
     query = {}
@@ -535,6 +553,8 @@ async def get_all_subjects(
         query["subjectCode"] = {"$regex": subjectCode.strip(), "$options": "i"}
     if subjectName:
         query["subjectName"] = {"$regex": subjectName.strip(), "$options": "i"}
+    if regulation and regulation.upper() != "ALL":
+        query["regulation"] = {"$regex": f"^{regulation.strip()}$", "$options": "i"}
     docs = [clean_doc(doc) async for doc in db.subjects.find(query).sort([("department", 1), ("semester", 1), ("subjectCode", 1)])]
     return docs
 
@@ -556,9 +576,64 @@ async def delete_subject(subjectCode: str, department: str):
 
 @router.post("/external")
 async def upload_external_marks(marks: List[ExternalMarksModel]):
+    if not marks:
+        raise HTTPException(status_code=400, detail={"error": "No marks data provided"})
+
+    uploaded = 0
+    skipped_students = []
+    skipped_subjects = []
+
+    # Cache validated register numbers to avoid repeated DB calls
+    validated_regs: Dict[str, bool] = {}
+
     for mark in marks:
-        await db.externals.update_one({"registerNumber": mark.registerNumber, "subjectCode": mark.subjectCode}, {"$set": mark.dict()}, upsert=True)
-    return {"message": "External marks uploaded", "count": len(marks)}
+        reg = (mark.registerNumber or "").strip()
+        subj = (mark.subjectCode or "").strip().upper()
+
+        if not reg or not subj:
+            continue
+
+        # Validate student exists in DB
+        if reg not in validated_regs:
+            student = await db.students.find_one({"registerNumber": reg})
+            if not student:
+                # Try case-insensitive fallback
+                student = await db.students.find_one({"registerNumber": {"$regex": f"^{re.escape(reg)}$", "$options": "i"}})
+            validated_regs[reg] = student is not None
+
+        if not validated_regs[reg]:
+            if reg not in skipped_students:
+                skipped_students.append(reg)
+            continue
+
+        # Validate subject exists in DB
+        subject = await db.subjects.find_one({"subjectCode": subj})
+        if not subject:
+            subject = await db.subjects.find_one({"subjectCode": {"$regex": f"^{re.escape(subj)}$", "$options": "i"}})
+        if not subject:
+            if subj not in skipped_subjects:
+                skipped_subjects.append(subj)
+            continue
+
+        await db.externals.update_one(
+            {"registerNumber": reg, "subjectCode": subj},
+            {"$set": {"registerNumber": reg, "subjectCode": subj, "externalMarks": mark.externalMarks}},
+            upsert=True,
+        )
+        uploaded += 1
+
+    msg = f"✅ External marks uploaded: {uploaded} entries."
+    if skipped_students:
+        msg += f" ⚠️ {len(skipped_students)} unknown register number(s) skipped."
+    if skipped_subjects:
+        msg += f" ⚠️ {len(skipped_subjects)} unknown subject code(s) skipped."
+
+    return {
+        "message": msg,
+        "uploaded": uploaded,
+        "skippedStudents": skipped_students,
+        "skippedSubjects": skipped_subjects,
+    }
 
 @router.post("/calculate-results")
 async def calculate_results():

@@ -5,7 +5,7 @@ import Tesseract from "tesseract.js";
 import * as pdfjsLib from "pdfjs-dist/build/pdf";
 import mammoth from "mammoth"; // ✅ Added Mammoth for Docx reading
 
-import { API_BASE, normalizeRowKeys, readFirstSheet, exportSemesterPaperDocx, exportUnitTestPaperDocx, exportClaimFormDocx, mergeResults, exportHallTicketsDocx } from "../utils.js";
+import { API_BASE, normalizeRowKeys, readFirstSheet, readAllSheets, exportSemesterPaperDocx, exportUnitTestPaperDocx, exportClaimFormDocx, mergeResults, exportHallTicketsDocx } from "../utils.js";
 import GPACalculator from "./GPACalculator"; 
 
 
@@ -21,6 +21,7 @@ export default function AdminDashboard({ onLogout }) {
   // Standard States
   const [dept, setDept] = useState("CSE"); 
   const [sem, setSem] = useState(3); 
+  const [reg, setReg] = useState("ALL");
   const [uploadRole, setUploadRole] = useState("student");
   const [calcDept, setCalcDept] = useState("CSE"); 
   const [calcSem, setCalcSem] = useState("3");
@@ -122,7 +123,7 @@ export default function AdminDashboard({ onLogout }) {
 
   useEffect(() => {
     if (activeTab === "grid" && gridType === "internal") {
-      fetch(`${API_BASE}/api/import/fetch-subjects?department=${dept}&semester=${sem}&paperType=${gridPaperType}`)
+      fetch(`${API_BASE}/api/import/fetch-subjects?department=${dept}&semester=${sem}&paperType=${gridPaperType}&regulation=${reg}`)
         .then(res => res.ok ? res.json() : [])
         .then(data => {
             const arr = Array.isArray(data) ? data : [];
@@ -130,7 +131,7 @@ export default function AdminDashboard({ onLogout }) {
             if(arr.length > 0) setGridSubject(arr[0].subjectCode); else setGridSubject(""); 
         }).catch(() => { setGridSubjectList([]); setGridSubject(""); });
     }
-  }, [dept, sem, gridPaperType, activeTab, gridType]);
+  }, [dept, sem, reg, gridPaperType, activeTab, gridType]);
 
   useEffect(() => {
     if (activeTab === "qpapers") {
@@ -179,6 +180,7 @@ export default function AdminDashboard({ onLogout }) {
   // --- SUBJECT BROWSER STATE (Setup tab) ---
   const [sbDept, setSbDept]         = useState("ALL");
   const [sbSem, setSbSem]           = useState(0);
+  const [sbReg, setSbReg]           = useState("ALL");
   const [sbCode, setSbCode]         = useState("");
   const [sbName, setSbName]         = useState("");
   const [sbList, setSbList]         = useState([]);
@@ -272,6 +274,7 @@ export default function AdminDashboard({ onLogout }) {
     const params = new URLSearchParams();
     if (sbDept !== "ALL") params.append("department", sbDept);
     if (sbSem && sbSem !== 0)  params.append("semester", sbSem);
+    if (sbReg !== "ALL")       params.append("regulation", sbReg);
     if (sbCode.trim())         params.append("subjectCode", sbCode.trim());
     if (sbName.trim())         params.append("subjectName", sbName.trim());
     try {
@@ -306,15 +309,11 @@ export default function AdminDashboard({ onLogout }) {
   const handleSubjectUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    readFirstSheet(file, (rows) => {
+    readAllSheets(file, (rows) => {
       const valid = [];
       const skipped = [];
 
       rows.forEach((r) => {
-        // normalizeRowKeys strips spaces & lowercases keys:
-        // "Subject Code" → "subjectcode", "Subject Name" → "subjectname",
-        // "Department" → "department", "Semester" → "semester",
-        // "Credits" → "credits", "Paper Type" → "papertype"
         const n = normalizeRowKeys(r);
 
         const subjectCode = String(n.subjectcode || n.code || n.subcode || "").toUpperCase().trim();
@@ -323,13 +322,11 @@ export default function AdminDashboard({ onLogout }) {
         const semester    = parseInt(n.semester || n.sem || "0", 10);
         const credits     = parseInt(n.credits || n.credit || n.c || "0", 10);
 
-        // Determine paper type — column "Paper Type" → normalized "papertype"
         let paperType = "THEORY";
         const pt = String(n.papertype || n.type || n.paper || "").toUpperCase().trim();
         if (["THEORY", "PRACTICAL", "INTEGRATED"].includes(pt)) {
           paperType = pt;
         } else {
-          // fallback: infer from L/T/P columns if present
           const lVal = parseInt(n.l) || 0;
           const pVal = parseInt(n.p) || 0;
           if (pVal > 0 && lVal > 0)      paperType = "INTEGRATED";
@@ -337,32 +334,34 @@ export default function AdminDashboard({ onLogout }) {
           else                             paperType = "THEORY";
         }
 
-        // Skip rows missing mandatory fields
         if (!subjectCode) { skipped.push(`Row missing Subject Code`); return; }
         if (!department)  { skipped.push(`${subjectCode}: missing Department`); return; }
         if (!semester || semester < 1 || semester > 99) {
           skipped.push(`${subjectCode}: invalid Semester "${n.semester}"`); return;
         }
 
+        const regulation  = String(n.regulation || n.reg || "").trim();
+
         valid.push({
           subjectCode,
           subjectName,
           department,
-          semester,        // integer: 1–8 (or 99 for graduated)
-          credits,         // stored as-is for GPA/credit calculations
+          semester,
+          credits,
           l: parseInt(n.l) || 0,
           t: parseInt(n.t) || 0,
           p: parseInt(n.p) || 0,
-          paperType
+          paperType,
+          regulation
         });
       });
 
       if (valid.length === 0) {
-        setMessage(`⚠️ No valid subjects found. ${skipped.length > 0 ? skipped.join("; ") : "Check column headers: Subject Code, Subject Name, Department, Semester, Credits, Paper Type"}`);
+        setMessage(`⚠️ No valid subjects found across sheets. ${skipped.length > 0 ? skipped.join("; ") : "Check column headers: Subject Code, Subject Name, Department, Semester, Credits, Paper Type"}`);
         return;
       }
 
-      setMessage(`📤 Uploading ${valid.length} subject(s)${skipped.length > 0 ? ` (${skipped.length} skipped: ${skipped.join("; ")})` : ""}...`);
+      setMessage(`📤 Uploading ${valid.length} subject(s)${skipped.length > 0 ? ` (${skipped.length} skipped)` : ""}...`);
       apiPost("/api/import/subjects", valid);
     });
   };
@@ -370,7 +369,7 @@ export default function AdminDashboard({ onLogout }) {
   const handleOtherSubjectUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    readFirstSheet(file, (rows) => {
+    readAllSheets(file, (rows) => {
       const valid = [];
       const skipped = [];
 
@@ -398,7 +397,7 @@ export default function AdminDashboard({ onLogout }) {
       });
 
       if (valid.length === 0) {
-        setMessage(`⚠️ No valid rows found. ${skipped.length > 0 ? skipped.join("; ") : "Check columns: Subject Code, Subject Name, Subject Semester, Category, Roll Numbers"}`);
+        setMessage(`⚠️ No valid rows found across sheets. ${skipped.length > 0 ? skipped.join("; ") : "Check columns: Subject Code, Subject Name, Subject Semester, Category, Roll Numbers"}`);
         return;
       }
 
@@ -411,19 +410,11 @@ export default function AdminDashboard({ onLogout }) {
     const file = e.target.files[0];
     if (!file) return;
 
-    readFirstSheet(file, (rows) => {
+    readAllSheets(file, (rows) => {
       const valid   = [];
       const skipped = [];
 
       rows.forEach((r, idx) => {
-        // normalizeRowKeys maps:
-        //  "Register Number" -> registerNumber  (via roll/reg detection)
-        //  "Name"            -> name
-        //  "DOB"             -> dob
-        //  "Department"      -> department
-        //  "Semester"        -> semester
-        //  "Year"            -> year
-        //  "Role"            -> role
         const n = normalizeRowKeys(r);
 
         const registerNumber = (n.registerNumber || n.registernumber || "").trim();
@@ -433,11 +424,9 @@ export default function AdminDashboard({ onLogout }) {
         const department     = String(n.department || n.dept || "").toUpperCase().trim();
         const semester       = parseInt(n.semester || n.sem || "0", 10);
         const year           = parseInt(n.year || "0", 10) || null;
-        // Role: prefer file column, fallback to UI selector
         const roleRaw = String(n.role || uploadRole || "student").toLowerCase().trim();
         const role    = ["student", "faculty", "hod"].includes(roleRaw) ? roleRaw : "student";
 
-        // Determine password: use explicit Password if provided, otherwise parse DOB (DD-MM-YYYY)
         let password = rawPassword || rawDob;
         if (!rawPassword && rawDob) {
           if (/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}$/.test(rawDob)) {
@@ -452,7 +441,6 @@ export default function AdminDashboard({ onLogout }) {
           }
         }
 
-        // Validate mandatory fields
         if (!registerNumber) { skipped.push(`Row ${idx+2}: missing Register Number`); return; }
         if (!department && (role === "student" || role === "faculty" || role === "hod")) { skipped.push(`${registerNumber}: missing Department`); return; }
         if (!semester && role === "student")   { skipped.push(`${registerNumber}: missing Semester`);   return; }
@@ -461,7 +449,7 @@ export default function AdminDashboard({ onLogout }) {
       });
 
       if (valid.length === 0) {
-        setMessage(`\u26a0\ufe0f No valid rows found. ${skipped.length > 0 ? skipped.join("; ") : "Check columns: Register Number, Name, DOB, Department, Semester, Year, Role"}`);
+        setMessage(`⚠️ No valid rows found across sheets. ${skipped.length > 0 ? skipped.join("; ") : "Check columns: Register Number, Name, DOB, Department, Semester, Year, Role"}`);
         return;
       }
 
@@ -471,48 +459,53 @@ export default function AdminDashboard({ onLogout }) {
       apiPost("/api/import/logins", valid);
     });
   };
-  const fetchSubjects = async (type) => { setPaperType(type); setSubjectList([]); setSelectedSubject(""); setMessage(`Fetching ${type} subjects...`); try { const res = await fetch(`${API_BASE}/api/import/fetch-subjects?department=${dept}&semester=${sem}&paperType=${type}`); if (!res.ok) throw new Error("Failed to fetch subjects"); const data = await res.json(); setSubjectList(data); if (data.length === 0) { setMessage(`⚠️ No ${type} subjects found.`); } else { setMessage(""); setSelectedSubject(data[0].subjectCode); } } catch (err) { setMessage(`❌ Error: ${err.message}`); } };
+  const fetchSubjects = async (type) => { setPaperType(type); setSubjectList([]); setSelectedSubject(""); setMessage(`Fetching ${type} subjects...`); try { const res = await fetch(`${API_BASE}/api/import/fetch-subjects?department=${dept}&semester=${sem}&paperType=${type}&regulation=${reg}`); if (!res.ok) throw new Error("Failed to fetch subjects"); const data = await res.json(); setSubjectList(data); if (data.length === 0) { setMessage(`⚠️ No ${type} subjects found.`); } else { setMessage(""); setSelectedSubject(data[0].subjectCode); } } catch (err) { setMessage(`❌ Error: ${err.message}`); } };
   const handleInternalUpload = () => { if (!internalFile || !selectedSubject) { setMessage("⚠️ Select a subject and file first."); return; } const formData = new FormData(); formData.append("file", internalFile); formData.append("subjectCode", selectedSubject); formData.append("department", dept); apiPost("/api/import/internal-upload", formData, true); };
   const handleExternalUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    readFirstSheet(file, (rows) => {
-      if (rows.length === 0) return;
-      const firstRow = normalizeRowKeys(rows[0]);
-      const isVertical = !!(firstRow.subjectcode || firstRow.subject || firstRow.code);
-      let payload = [];
-      if (isVertical) {
-        payload = rows.map((r) => {
-          const n = normalizeRowKeys(r);
-          return {
-            registerNumber: n.registerNumber || "",
-            subjectCode: String(n.subjectcode || n.subject || n.code).toUpperCase().trim(),
-            externalMarks: parseInt(n.externalmarks || n.mark || n.external) || 0
-          };
-        }).filter(item => item.registerNumber && item.subjectCode);
-      } else {
-        payload = rows.flatMap((r) => {
-          const n = normalizeRowKeys(r);
-          const regNo = n.registerNumber;
-          if (!regNo) return [];
-          const ignoreKeys = ["registernumber", "rollno", "name", "sno", "serialno", "department", "semester", "dob", "password"];
-          return Object.keys(r).map(k => {
-            const lowerKey = k.toLowerCase().trim().replace(/[^a-z0-9]/g, "");
-            if (ignoreKeys.includes(lowerKey)) return null;
-            const markVal = parseInt(r[k]);
-            if (isNaN(markVal)) return null;
-            return {
-              registerNumber: regNo,
-              subjectCode: k.toUpperCase().trim(),
-              externalMarks: markVal
-            };
-          }).filter(item => item !== null);
-        });
-      }
-      if (payload.length === 0) {
-        setMessage("⚠️ No valid external marks found in the file.");
+    readAllSheets(file, (rows) => {
+      if (rows.length === 0) {
+        setMessage("⚠️ No data found in the uploaded file.");
         return;
       }
+      // Matrix format only:
+      // Col 1 = Register Number
+      // Col 2..N = Subject Codes (e.g. CS3452, CS3491 ...)
+      // Each row = one student's marks across all subjects
+      const IGNORE_KEYS = new Set(["registernumber", "rollno", "name", "sno", "serialno", "department", "semester", "dob", "password", "section", "batch", "year"]);
+      const payload = [];
+      let studentCount = 0;
+      let subjectCount = 0;
+
+      rows.forEach((r) => {
+        const n = normalizeRowKeys(r);
+        const regNo = (n.registerNumber || "").trim();
+        // Skip rows with no valid register number (min 8 chars to filter junk)
+        if (!regNo || regNo.length < 8) return;
+
+        studentCount++;
+        // Every non-ignored key that has a numeric value is treated as a subject code
+        Object.keys(r).forEach((k) => {
+          const lowerKey = k.toLowerCase().trim().replace(/[^a-z0-9]/g, "");
+          if (IGNORE_KEYS.has(lowerKey)) return;
+          const rawVal = r[k];
+          const markVal = parseInt(rawVal);
+          if (isNaN(markVal) || markVal < 0) return;
+          payload.push({
+            registerNumber: regNo,
+            subjectCode: k.toUpperCase().trim(),
+            externalMarks: markVal
+          });
+          subjectCount++;
+        });
+      });
+
+      if (payload.length === 0) {
+        setMessage("⚠️ No valid marks found. Ensure your Excel has Register Number as the first column and subject codes (e.g. CS3452) as remaining column headers.");
+        return;
+      }
+      setMessage(`📤 Uploading external marks: ${studentCount} students × subjects = ${payload.length} entries...`);
       apiPost("/api/import/external", payload);
     });
   };
@@ -576,14 +569,28 @@ export default function AdminDashboard({ onLogout }) {
       const data = await res.json();
       const validData = Array.isArray(data) ? data : [];
       
-      const targetYear = Math.ceil(Number(sem) / 2);
+      const isAllDept = String(dept).toUpperCase() === "ALL";
+      const isAllSem = String(sem).toUpperCase() === "ALL" || Number(sem) === 0;
+
       let filtered = validData.filter(u => {
+        if (u.role && u.role !== "student") return false;
         const dbDept = String(u.department || "").trim().toUpperCase();
         const uiDept = String(dept).trim().toUpperCase();
-        if (dbDept !== uiDept) return false;
-        if (Number(sem) === 99) return Number(u.semester) === 99;
-        const studentYear = Number(u.year) || Math.ceil(Number(u.semester) / 2);
-        return studentYear === targetYear;
+        if (!isAllDept && dbDept !== uiDept) return false;
+        if (!isAllSem) {
+          if (Number(sem) === 99) {
+            if (Number(u.semester) !== 99) return false;
+          } else {
+            const targetYear = Math.ceil(Number(sem) / 2);
+            const studentYear = Number(u.year) || Math.ceil(Number(u.semester) / 2);
+            if (studentYear !== targetYear && Number(u.semester) !== Number(sem)) return false;
+          }
+        }
+        if (reg !== "ALL") {
+          const studentReg = String(u.regulation || u.regulations || u.reg || (Number(u.semester || 1) <= 4 ? "2024" : "2021"));
+          if (!studentReg.includes(reg)) return false;
+        }
+        return true;
       });
       
       if (gridSubject.trim()) {
@@ -1000,14 +1007,13 @@ export default function AdminDashboard({ onLogout }) {
           <button onClick={() => setActiveTab("qpapers")} className={`pb-2 px-4 font-bold transition-colors ${activeTab === "qpapers" ? "border-b-2 border-purple-600 text-purple-700" : "text-gray-500 hover:text-purple-700"}`}>1. Question Papers</button>
           <button onClick={() => setActiveTab("setup")} className={`pb-2 px-4 font-medium transition-colors ${activeTab === "setup" ? "border-b-2 border-indigo-600 text-indigo-600" : "text-gray-500"}`}>2. Setup</button>
           <button onClick={() => setActiveTab("excel")} className={`pb-2 px-4 font-medium transition-colors ${activeTab === "excel" ? "border-b-2 border-indigo-600 text-indigo-600" : "text-gray-500"}`}>3. Excel Uploads</button>
-          <button onClick={() => setActiveTab("grid")} className={`pb-2 px-4 font-bold transition-colors ${activeTab === "grid" ? "border-b-2 border-green-600 text-green-700" : "text-gray-500 hover:text-green-700"}`}>4. Live Grid Entry</button>
-          <button onClick={() => setActiveTab("process")} className={`pb-2 px-4 font-medium transition-colors ${activeTab === "process" ? "border-b-2 border-indigo-600 text-indigo-600" : "text-gray-500"}`}>5. Calculate</button>
-          <button onClick={() => setActiveTab("manual")} className={`pb-2 px-4 font-bold transition-colors ${activeTab === "manual" ? "border-b-2 border-orange-500 text-orange-600" : "text-gray-500 hover:text-orange-600"}`}>6. Final Override</button>
-          <button onClick={() => setActiveTab("manage")} className={`pb-2 px-4 font-bold transition-colors ${activeTab === "manage" ? "border-b-2 border-red-600 text-red-600" : "text-gray-500 hover:text-red-600"}`}>7. Manage Live</button>
-          <button onClick={() => setActiveTab("halltickets")} className={`pb-2 px-4 font-bold transition-colors ${activeTab === "halltickets" ? "border-b-2 border-pink-600 text-pink-700" : "text-gray-500 hover:text-pink-700"}`}>8. Hall Tickets</button>
-          <button onClick={() => setActiveTab("gpa")} className={`pb-2 px-4 font-bold transition-colors ${activeTab === "gpa" ? "border-b-2 border-indigo-600 text-indigo-700" : "text-gray-500 hover:text-indigo-700"}`}>9. GPA Calc</button>
-          <button onClick={() => setActiveTab("profiles")} className={`pb-2 px-4 font-bold transition-colors ${activeTab === "profiles" ? "border-b-2 border-blue-600 text-blue-700" : "text-gray-500 hover:text-blue-700"}`}>10. Profiles</button>
-          <button onClick={() => setActiveTab("settings")} className={`pb-2 px-4 font-bold transition-colors ${activeTab === "settings" ? "border-b-2 border-slate-600 text-slate-700" : "text-gray-500 hover:text-slate-700"}`}>11. Settings</button>
+          <button onClick={() => setActiveTab("process")} className={`pb-2 px-4 font-medium transition-colors ${activeTab === "process" ? "border-b-2 border-indigo-600 text-indigo-600" : "text-gray-500"}`}>4. Calculate</button>
+          <button onClick={() => setActiveTab("manual")} className={`pb-2 px-4 font-bold transition-colors ${activeTab === "manual" ? "border-b-2 border-orange-500 text-orange-600" : "text-gray-500 hover:text-orange-600"}`}>5. Final Override</button>
+          <button onClick={() => setActiveTab("manage")} className={`pb-2 px-4 font-bold transition-colors ${activeTab === "manage" ? "border-b-2 border-red-600 text-red-600" : "text-gray-500 hover:text-red-600"}`}>6. Manage Live</button>
+          <button onClick={() => setActiveTab("halltickets")} className={`pb-2 px-4 font-bold transition-colors ${activeTab === "halltickets" ? "border-b-2 border-pink-600 text-pink-700" : "text-gray-500 hover:text-pink-700"}`}>7. Hall Tickets</button>
+          <button onClick={() => setActiveTab("gpa")} className={`pb-2 px-4 font-bold transition-colors ${activeTab === "gpa" ? "border-b-2 border-indigo-600 text-indigo-700" : "text-gray-500 hover:text-indigo-700"}`}>8. GPA Calc</button>
+          <button onClick={() => setActiveTab("profiles")} className={`pb-2 px-4 font-bold transition-colors ${activeTab === "profiles" ? "border-b-2 border-blue-600 text-blue-700" : "text-gray-500 hover:text-blue-700"}`}>9. Profiles</button>
+          <button onClick={() => setActiveTab("settings")} className={`pb-2 px-4 font-bold transition-colors ${activeTab === "settings" ? "border-b-2 border-slate-600 text-slate-700" : "text-gray-500 hover:text-slate-700"}`}>10. Settings</button>
         </div>
 
 
@@ -1627,7 +1633,7 @@ export default function AdminDashboard({ onLogout }) {
 
               {/* Filter bar */}
               <div className="p-5 border-b border-gray-100 bg-slate-50">
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-3">
                   <div>
                     <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Department</label>
                     <select value={sbDept} onChange={e => setSbDept(e.target.value)} className="w-full p-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-400 bg-white">
@@ -1643,6 +1649,15 @@ export default function AdminDashboard({ onLogout }) {
                     </select>
                   </div>
                   <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Regulation</label>
+                    <select value={sbReg} onChange={e => setSbReg(e.target.value)} className="w-full p-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-400 bg-white">
+                      <option value="ALL">All Regulations</option>
+                      <option value="2024">Regulation 2024</option>
+                      <option value="2021">Regulation 2021</option>
+                      <option value="2017">Regulation 2017</option>
+                    </select>
+                  </div>
+                  <div>
                     <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Subject Code</label>
                     <input value={sbCode} onChange={e => setSbCode(e.target.value.toUpperCase())} onKeyDown={e => e.key === "Enter" && fetchAllSubjects()} placeholder="e.g. CS3501" className="w-full p-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-400" />
                   </div>
@@ -1655,7 +1670,7 @@ export default function AdminDashboard({ onLogout }) {
                   <button onClick={fetchAllSubjects} disabled={sbLoading} className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white font-bold px-5 py-2 rounded-lg text-sm transition-all active:scale-95 flex items-center gap-2">
                     {sbLoading ? <span className="animate-spin">⏳</span> : "🔍"} {sbLoading ? "Searching..." : "Search Subjects"}
                   </button>
-                  <button onClick={() => { setSbDept("ALL"); setSbSem(0); setSbCode(""); setSbName(""); setSbList([]); setMessage(""); }} className="bg-gray-100 hover:bg-gray-200 text-gray-600 font-semibold px-4 py-2 rounded-lg text-sm transition-all">
+                  <button onClick={() => { setSbDept("ALL"); setSbSem(0); setSbReg("ALL"); setSbCode(""); setSbName(""); setSbList([]); setMessage(""); }} className="bg-gray-100 hover:bg-gray-200 text-gray-600 font-semibold px-4 py-2 rounded-lg text-sm transition-all">
                     ✕ Clear
                   </button>
                 </div>
@@ -1671,6 +1686,7 @@ export default function AdminDashboard({ onLogout }) {
                         <th className="px-4 py-3">Subject Name</th>
                         <th className="px-4 py-3 text-center">Dept</th>
                         <th className="px-4 py-3 text-center">Sem</th>
+                        <th className="px-4 py-3 text-center">Reg</th>
                         <th className="px-4 py-3 text-center">Credits</th>
                         <th className="px-4 py-3 text-center">Type</th>
                         <th className="px-4 py-3 text-center w-24">Action</th>
@@ -1685,6 +1701,7 @@ export default function AdminDashboard({ onLogout }) {
                             <span className="bg-blue-100 text-blue-800 text-xs font-bold px-2 py-0.5 rounded">{s.department}</span>
                           </td>
                           <td className="px-4 py-3 text-center font-semibold text-gray-700">Sem {s.semester}</td>
+                          <td className="px-4 py-3 text-center font-semibold text-xs"><span className="bg-amber-100 text-amber-800 px-2 py-0.5 rounded font-bold">{s.regulation || "—"}</span></td>
                           <td className="px-4 py-3 text-center font-bold text-gray-700">{s.credits}</td>
                           <td className="px-4 py-3 text-center">
                             <span className={`text-xs font-bold px-2 py-0.5 rounded ${s.paperType === "THEORY" ? "bg-green-100 text-green-700" : s.paperType === "PRACTICAL" ? "bg-purple-100 text-purple-700" : "bg-orange-100 text-orange-700"}`}>
@@ -1716,67 +1733,42 @@ export default function AdminDashboard({ onLogout }) {
                 </div>
               )}
             </div>
-
           </motion.div>
         )}
         
-        {activeTab === "excel" && (<motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
+        {activeTab === "excel" && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
             <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-100 mb-6">
-                <div className="flex justify-between mb-6"><h2 className="text-lg font-bold text-gray-800">Upload Internal Marks</h2><select value={uploadFormat} onChange={e => setUploadFormat(e.target.value)} className="p-2 border border-blue-300 rounded-lg font-bold text-blue-700 bg-blue-50 outline-none"><option value="EXCEL">📄 Excel / CSV Document</option><option value="SCAN">📸 AI Smart Scan (Image OCR)</option></select></div>
-                <div className="grid grid-cols-2 gap-6 mb-6"><div><label className="block text-xs font-bold text-gray-500 uppercase mb-2">Department</label><select value={dept} onChange={(e) => setDept(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md">{DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}</select></div><div><label className="block text-xs font-bold text-gray-500 uppercase mb-2">Semester</label><select value={sem} onChange={(e) => setSem(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md">{[1, 2, 3, 4, 5, 6, 7, 8, 99].map((n) => <option key={n} value={n}>{n === 99 ? "Graduated 🎓" : `Semester ${n}`}</option>)}</select></div></div>
-                {uploadFormat === "EXCEL" ? (
-                    <><div className="mb-6"><label className="block text-xs font-bold text-gray-500 uppercase mb-3">Select Paper Type</label><div className="flex gap-4"><button onClick={() => fetchSubjects("THEORY")} className="flex-1 py-2 rounded-lg border font-medium text-sm">📘 Theory</button><button onClick={() => fetchSubjects("PRACTICAL")} className="flex-1 py-2 rounded-lg border font-medium text-sm">🧪 Practical</button><button onClick={() => fetchSubjects("INTEGRATED")} className="flex-1 py-2 rounded-lg border font-medium text-sm">🔀 Integrated</button></div></div>
-                        {paperType && (<motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-4 bg-slate-50 p-4 rounded-lg border border-slate-200"><div><label className="block text-xs font-bold text-gray-500 uppercase mb-2">Select Subject</label><select value={selectedSubject} onChange={(e) => setSelectedSubject(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md bg-white text-sm">{subjectList.map((s) => <option key={s.subjectCode} value={s.subjectCode}>{s.subjectCode} - {s.subjectName}</option>)}</select></div><div><label className="block text-xs font-bold text-gray-500 uppercase mb-2">Upload Internal Excel</label><input type="file" onChange={(e) => setInternalFile(e.target.files[0])} className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:bg-indigo-600 file:text-white" accept=".xlsx, .xls, .csv" /></div><button onClick={handleInternalUpload} disabled={loading} className="w-full py-2 rounded-lg font-bold text-white bg-indigo-600 hover:bg-indigo-700">🚀 Upload Internals</button></motion.div>)}
-                    </>
-                ) : (
-                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="bg-blue-50 p-6 rounded-xl border border-blue-200"><h3 className="font-bold text-blue-900 mb-2">📸 Document AI (OCR)</h3><p className="text-sm text-blue-700 mb-4">Upload a clear photo (PNG/JPG) of a physical marksheet. The system will use Optical Character Recognition to extract Register Numbers and Marks automatically.</p><input type="file" onChange={handleSmartScanUpload} accept="image/*" className="block w-full text-sm text-blue-700 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:bg-blue-600 file:text-white file:font-bold hover:file:bg-blue-700 cursor-pointer" />
-                        {showOcrModal && (<div className="mt-6 p-4 bg-white rounded-lg border border-blue-100 shadow-sm"><h4 className="font-bold text-gray-700 mb-2">Raw Scanned Data</h4><textarea value={ocrText} onChange={e => setOcrText(e.target.value)} className="w-full h-40 p-3 border border-gray-300 rounded text-sm font-mono text-gray-600 outline-none focus:border-blue-500" placeholder="Extracted text will appear here. You can manually edit it before saving..." /><div className="mt-4 flex gap-4"><input type="text" placeholder="Subject Code (e.g. CS3452)" value={selectedSubject} onChange={e => setSelectedSubject(e.target.value)} className="border p-2 rounded flex-1 outline-none font-bold" /><button onClick={parseOcrDataToDB} className="bg-green-600 text-white font-bold py-2 px-6 rounded shadow-md hover:bg-green-700">Send to Drafts</button></div></div>)}
-                    </motion.div>
-                )}
-            </div>
-            {uploadFormat === "EXCEL" && (<div className="bg-white p-8 rounded-xl shadow-sm border border-gray-100"><h2 className="text-lg font-bold mb-4 text-gray-800">Upload External Marks (Excel)</h2><p className="text-sm text-gray-500 mb-4">Upload the final university external marks sheet.</p><input type="file" onChange={handleExternalUpload} accept=".xlsx, .csv" className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:bg-teal-50 file:text-teal-700" /></div>)}
-        </motion.div>)}
-        
-        {activeTab === "grid" && (<motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
-            <div className="bg-green-50 p-8 rounded-xl shadow-sm border border-green-200">
-              <div className="flex justify-between items-center mb-6"><h2 className="text-xl font-bold text-green-800">Live Grid Data Entry</h2><span className="bg-green-200 text-green-800 text-xs font-bold px-3 py-1 rounded shadow-sm">Excel Generator Backend</span></div>
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
-                <div><label className="block text-xs font-bold text-green-700 uppercase mb-2">Target Dept</label><select value={dept} onChange={(e) => setDept(e.target.value)} className="w-full p-2.5 border border-green-300 rounded-lg font-bold text-gray-700 bg-white outline-none focus:ring-2 focus:ring-green-500">{DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}</select></div>
-                <div><label className="block text-xs font-bold text-green-700 uppercase mb-2">Semester</label><select value={sem} onChange={(e) => setSem(e.target.value)} className="w-full p-2.5 border border-green-300 rounded-lg font-bold text-gray-700 bg-white outline-none focus:ring-2 focus:ring-green-500">{[1, 2, 3, 4, 5, 6, 7, 8, 99].map(n => <option key={n} value={n}>{n === 99 ? "Graduated 🎓" : `Semester ${n}`}</option>)}</select></div>
-                <div><label className="block text-xs font-bold text-green-700 uppercase mb-2">Mark Type</label><select value={gridType} onChange={(e) => { setGridType(e.target.value); setGridData([]); }} className="w-full p-2.5 border border-green-300 rounded-lg font-bold text-indigo-700 bg-white outline-none focus:ring-2 focus:ring-green-500"><option value="internal">Internal Marks</option><option value="external">External Marks</option></select></div>
-                {gridType === "internal" ? (<>
-                    <div><label className="block text-xs font-bold text-green-700 uppercase mb-2">Paper Type</label><select value={gridPaperType} onChange={(e) => { setGridPaperType(e.target.value); setGridData([]); }} className="w-full p-2.5 border border-green-300 rounded-lg font-bold text-indigo-700 bg-white outline-none focus:ring-2 focus:ring-green-500"><option value="THEORY">📘 Theory</option><option value="PRACTICAL">🧪 Practical</option><option value="INTEGRATED">🔀 Integrated</option></select></div>
-                    <div><label className="block text-xs font-bold text-green-700 uppercase mb-2">Template Mode</label><select value={templateMode} onChange={(e) => { setTemplateMode(e.target.value); setGridData([]); setCustomCols([]); }} className="w-full p-2.5 border border-green-300 rounded-lg font-bold text-orange-700 bg-white outline-none focus:ring-2 focus:ring-green-500"><option value="STANDARD">📐 Standard Grid</option><option value="CUSTOM">⚙️ Custom Excel</option></select></div>
-                  </>) : (<div className="col-span-2"><label className="block text-xs font-bold text-green-700 uppercase mb-2">Subject Code</label><input type="text" placeholder="e.g. CS3452" value={gridSubject} onChange={(e) => setGridSubject(e.target.value.toUpperCase())} className="w-full p-2.5 border border-green-300 rounded-lg font-bold text-gray-700 bg-white shadow-sm focus:ring-2 focus:ring-green-500 outline-none" /></div>)}
-              </div>
-              {gridType === "internal" && (<div className="mb-6"><label className="block text-xs font-bold text-green-700 uppercase mb-2">Select Subject from Database</label><select value={gridSubject} onChange={(e) => setGridSubject(e.target.value)} className="w-full p-2.5 border border-green-300 rounded-lg font-bold text-gray-700 bg-white outline-none focus:ring-2 focus:ring-green-500">{gridSubjectList.length === 0 ? <option value="">No subjects found for this Dept/Sem/Type</option> : gridSubjectList.map(s => <option key={s.subjectCode} value={s.subjectCode}>{s.subjectCode} - {s.subjectName}</option>)}</select></div>)}
-              {gridType === "internal" && templateMode === "CUSTOM" && (<div className="mb-6"><label className="block text-xs font-bold text-green-700 uppercase mb-2">Upload Custom Template (Excel)</label><input type="file" onChange={handleCustomTemplateUpload} accept=".xlsx, .xls, .csv" className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:bg-green-100 file:text-green-800 font-bold" /><p className="text-xs text-gray-500 mt-2">Upload any Excel sheet. The grid will automatically rebuild itself using your exact headers! (Saved as {gridPaperType} type)</p></div>)}
-              <button onClick={fetchStudentsForGrid} disabled={gridType === "internal" && templateMode === "CUSTOM" && customCols.length === 0} className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 rounded-lg shadow-md transition-colors active:scale-95 flex justify-center items-center gap-2 disabled:bg-gray-400"><span>🔄</span> Fetch Roster for Entry</button>
-            </div>
-            {gridData.length > 0 && (<div className="bg-white border border-gray-300 rounded-xl overflow-hidden shadow-lg"><div className="bg-slate-800 text-white px-6 py-4 flex justify-between items-center"><h3 className="font-bold text-lg tracking-wide">Entering {gridType === 'internal' ? gridPaperType + ' Internals' : 'Externals'} for {templateMode === "CUSTOM" ? "Custom Document" : gridSubject}</h3><span className="text-sm font-bold bg-indigo-500 px-4 py-1.5 rounded-full">{gridData.length} Students</span></div><div className="max-h-[650px] overflow-auto"><table className="w-full text-sm text-left border-collapse"><thead className="bg-slate-100 text-slate-700 uppercase text-xs font-bold sticky top-0 shadow-sm z-40 whitespace-nowrap">
-                      {gridType === "internal" && templateMode === "CUSTOM" && (<tr><th className="px-6 py-4 border-r border-b-2 border-slate-300 bg-slate-200 w-[160px] min-w-[160px] sticky left-0 z-50">Register No</th><th className="px-6 py-4 border-r border-b-2 border-slate-300 bg-slate-200 w-[250px] min-w-[250px] sticky left-[160px] z-50">Name</th>{customCols.map(c => (<th key={c} className="px-4 py-4 text-center border-b-2 border-r border-slate-300 bg-blue-50 text-blue-900 tracking-wider">{c}</th>))}</tr>)}
-                      {gridType === "internal" && templateMode === "STANDARD" && gridPaperType === "THEORY" && (<><tr><th rowSpan={2} className="px-6 py-4 border-r border-b-2 border-slate-300 bg-slate-200 w-[160px] min-w-[160px] sticky left-0 z-50">Register No</th><th rowSpan={2} className="px-6 py-4 border-r border-b-2 border-slate-300 bg-slate-200 w-[250px] min-w-[250px] sticky left-[160px] z-50">Name</th><th colSpan={7} className="px-4 py-2 text-center border-b border-r border-slate-300 bg-blue-100 text-blue-900 tracking-wider">Unit Test</th><th colSpan={5} className="px-4 py-2 text-center border-b border-r border-slate-300 bg-amber-100 text-amber-900 tracking-wider">Seminar / Case Study</th><th rowSpan={2} className="px-4 py-4 text-center border-b-2 border-slate-300 bg-teal-100 text-teal-900 tracking-wider">Internal I</th></tr><tr><th className="px-2 py-2 text-center bg-blue-50 border-r border-b-2 border-slate-300">UT-1</th><th className="px-2 py-2 text-center bg-blue-50 border-r border-b-2 border-slate-300">UT-2</th><th className="px-2 py-2 text-center bg-blue-50 border-r border-b-2 border-slate-300">UT-3</th><th className="px-2 py-2 text-center bg-blue-50 border-r border-b-2 border-slate-300">UT-4</th><th className="px-2 py-2 text-center bg-blue-50 border-r border-b-2 border-slate-300">UT-5</th><th className="px-2 py-2 text-center bg-blue-50 border-r border-b-2 border-slate-300">Avg</th><th className="px-2 py-2 text-center border-r border-b-2 border-slate-300 bg-blue-100">UT</th><th className="px-2 py-2 text-center bg-amber-50 border-r border-b-2 border-slate-300">Title</th><th className="px-2 py-2 text-center bg-amber-50 border-r border-b-2 border-slate-300">Dress</th><th className="px-2 py-2 text-center bg-amber-50 border-r border-b-2 border-slate-300">Presenta</th><th className="px-2 py-2 text-center bg-amber-50 border-r border-b-2 border-slate-300">Discus</th><th className="px-2 py-2 text-center border-r border-b-2 border-slate-300 bg-amber-100">Marks</th></tr></>)}
-                      {gridType === "internal" && templateMode === "STANDARD" && gridPaperType === "PRACTICAL" && (<><tr><th rowSpan={2} className="px-6 py-4 border-r border-b-2 border-slate-300 bg-slate-200 w-[160px] min-w-[160px] sticky left-0 z-50">Register No</th><th rowSpan={2} className="px-6 py-4 border-r border-b-2 border-slate-300 bg-slate-200 w-[250px] min-w-[250px] sticky left-[160px] z-50">Name</th><th colSpan={10} className="px-4 py-2 text-center border-b border-r border-slate-300 bg-blue-100 text-blue-900 tracking-wider">Marks for Each Experiment (10)</th><th rowSpan={2} className="px-3 py-4 text-center border-r border-b-2 border-slate-300 bg-slate-100">Avg</th><th rowSpan={2} className="px-3 py-4 text-center border-r border-b-2 border-slate-300 bg-slate-100">75%</th><th rowSpan={2} className="px-3 py-4 text-center border-r border-b-2 border-slate-300 bg-slate-100">25%</th><th rowSpan={2} className="px-4 py-4 text-center border-b-2 border-slate-300 bg-teal-100 text-teal-900 tracking-wider">Int Mark</th></tr><tr><th className="px-2 py-2 text-center bg-blue-50 border-r border-b-2 border-slate-300">Ex-1</th><th className="px-2 py-2 text-center bg-blue-50 border-r border-b-2 border-slate-300">Ex-2</th><th className="px-2 py-2 text-center bg-blue-50 border-r border-b-2 border-slate-300">Ex-3</th><th className="px-2 py-2 text-center bg-blue-50 border-r border-b-2 border-slate-300">Ex-4</th><th className="px-2 py-2 text-center bg-blue-50 border-r border-b-2 border-slate-300">Ex-5</th><th className="px-2 py-2 text-center bg-blue-50 border-r border-b-2 border-slate-300">Ex-6</th><th className="px-2 py-2 text-center bg-blue-50 border-r border-b-2 border-slate-300">Ex-7</th><th className="px-2 py-2 text-center bg-blue-50 border-r border-b-2 border-slate-300">Ex-8</th><th className="px-2 py-2 text-center bg-blue-50 border-r border-b-2 border-slate-300">Ex-9</th><th className="px-2 py-2 text-center border-r border-b-2 border-slate-300 bg-blue-100">Ex-10</th></tr></>)}
-                      {gridType === "internal" && templateMode === "STANDARD" && gridPaperType === "INTEGRATED" && (<><tr><th rowSpan={2} className="px-6 py-4 border-r border-b-2 border-slate-300 bg-slate-200 w-[160px] min-w-[160px] sticky left-0 z-50">Register No</th><th rowSpan={2} className="px-6 py-4 border-r border-b-2 border-slate-300 bg-slate-200 w-[250px] min-w-[250px] sticky left-[160px] z-50">Name</th><th colSpan={6} className="px-4 py-2 text-center border-b border-r border-slate-300 bg-blue-100 text-blue-900 tracking-wider">Unit Test</th><th colSpan={5} className="px-4 py-2 text-center border-b border-r border-slate-300 bg-amber-100 text-amber-900 tracking-wider">Seminar / Case Study</th><th rowSpan={2} className="px-4 py-4 text-center border-r border-b-2 border-slate-300 bg-teal-50 text-teal-900 tracking-wider">Int Mar</th><th colSpan={5} className="px-4 py-2 text-center border-b border-r border-slate-300 bg-purple-100 text-purple-900 tracking-wider">Experiments</th><th rowSpan={2} className="px-3 py-4 text-center border-r border-b-2 border-slate-300 bg-slate-100">Avg</th><th rowSpan={2} className="px-3 py-4 text-center border-r border-b-2 border-slate-300 bg-slate-100">75%</th><th rowSpan={2} className="px-3 py-4 text-center border-r border-b-2 border-slate-300 bg-slate-100">Model</th><th rowSpan={2} className="px-4 py-4 text-center border-b-2 border-slate-300 bg-teal-100 text-teal-900 tracking-wider">Internal</th></tr><tr><th className="px-2 py-2 text-center bg-blue-50 border-r border-b-2 border-slate-300">UT-1</th><th className="px-2 py-2 text-center bg-blue-50 border-r border-b-2 border-slate-300">UT-2</th><th className="px-2 py-2 text-center bg-blue-50 border-r border-b-2 border-slate-300">UT-3</th><th className="px-2 py-2 text-center bg-blue-50 border-r border-b-2 border-slate-300">UT-T</th><th className="px-2 py-2 text-center bg-blue-50 border-r border-b-2 border-slate-300">UT-eq</th><th className="px-2 py-2 text-center border-r border-b-2 border-slate-300 bg-blue-100">UT</th><th className="px-2 py-2 text-center bg-amber-50 border-r border-b-2 border-slate-300">Title</th><th className="px-2 py-2 text-center bg-amber-50 border-r border-b-2 border-slate-300">Dress</th><th className="px-2 py-2 text-center bg-amber-50 border-r border-b-2 border-slate-300">Presenta</th><th className="px-2 py-2 text-center bg-amber-50 border-r border-b-2 border-slate-300">Discus</th><th className="px-2 py-2 text-center border-r border-b-2 border-slate-300 bg-amber-100">Marks</th><th className="px-2 py-2 text-center bg-purple-50 border-r border-b-2 border-slate-300">Ex-1</th><th className="px-2 py-2 text-center bg-purple-50 border-r border-b-2 border-slate-300">Ex-2</th><th className="px-2 py-2 text-center bg-purple-50 border-r border-b-2 border-slate-300">Ex-3</th><th className="px-2 py-2 text-center bg-purple-50 border-r border-b-2 border-slate-300">Ex-4</th><th className="px-2 py-2 text-center bg-purple-50 border-r border-b-2 border-slate-300">Ex-5</th></tr></>)}
-                      {gridType === "external" && (<tr><th className="px-6 py-4 border-b-2 border-slate-300 bg-slate-200">Register No</th><th className="px-6 py-4 border-b-2 border-slate-300 bg-slate-200">Name</th><th className="px-6 py-4 text-center border-b-2 border-slate-300 bg-teal-100 text-teal-900 text-base">External Marks (Out of 100)</th></tr>)}
-                    </thead><tbody className="divide-y divide-gray-200 whitespace-nowrap">
-                      {gridData.map((s, idx) => (
-                        <tr key={s.registerNumber} className="hover:bg-indigo-50/50 transition-colors">
-                          <td className="px-4 py-3 font-mono font-bold text-gray-700 border-r sticky left-0 bg-white z-20 w-[160px] min-w-[160px] shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">{s.registerNumber}</td>
-                          <td className="px-4 py-3 font-semibold text-gray-800 border-r sticky left-[160px] bg-white z-20 w-[250px] min-w-[250px] shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] whitespace-normal leading-tight">{s.name}</td>
-                          {gridType === "internal" && templateMode === "CUSTOM" && customCols.map(c => (<td key={c} className="px-2 py-2 text-center border-r"><input type="text" value={s[c] || ""} onChange={(e) => handleGridChange(idx, c, e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td>))}
-                          {gridType === "internal" && templateMode === "STANDARD" && gridPaperType === "THEORY" && (<><td className="px-2 py-2 text-center border-r"><input type="number" value={s.ut1} onChange={(e) => handleGridChange(idx, "ut1", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.ut2} onChange={(e) => handleGridChange(idx, "ut2", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.ut3} onChange={(e) => handleGridChange(idx, "ut3", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.ut4} onChange={(e) => handleGridChange(idx, "ut4", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.ut5} onChange={(e) => handleGridChange(idx, "ut5", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.utAvg} onChange={(e) => handleGridChange(idx, "utAvg", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.utScaled} onChange={(e) => handleGridChange(idx, "utScaled", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="text" value={s.title} onChange={(e) => handleGridChange(idx, "title", e.target.value)} className="w-48 p-2 text-sm border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" placeholder="Seminar Topic..." /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.dress} onChange={(e) => handleGridChange(idx, "dress", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.pres} onChange={(e) => handleGridChange(idx, "pres", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.disc} onChange={(e) => handleGridChange(idx, "disc", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.semMarks} onChange={(e) => handleGridChange(idx, "semMarks", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-3 py-2 text-center"><input type="number" value={s.int1} onChange={(e) => handleGridChange(idx, "int1", e.target.value)} className="w-20 text-center p-2 text-base font-bold border border-teal-400 bg-teal-50 text-teal-900 rounded focus:border-teal-600 focus:ring-2 focus:ring-teal-200 outline-none shadow-inner" /></td></>)}
-                          {gridType === "internal" && templateMode === "STANDARD" && gridPaperType === "PRACTICAL" && (<><td className="px-2 py-2 text-center border-r"><input type="number" value={s.ex1} onChange={(e) => handleGridChange(idx, "ex1", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.ex2} onChange={(e) => handleGridChange(idx, "ex2", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.ex3} onChange={(e) => handleGridChange(idx, "ex3", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.ex4} onChange={(e) => handleGridChange(idx, "ex4", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.ex5} onChange={(e) => handleGridChange(idx, "ex5", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.ex6} onChange={(e) => handleGridChange(idx, "ex6", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.ex7} onChange={(e) => handleGridChange(idx, "ex7", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.ex8} onChange={(e) => handleGridChange(idx, "ex8", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.ex9} onChange={(e) => handleGridChange(idx, "ex9", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.ex10} onChange={(e) => handleGridChange(idx, "ex10", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.pAvg} onChange={(e) => handleGridChange(idx, "pAvg", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.p75} onChange={(e) => handleGridChange(idx, "p75", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.p25} onChange={(e) => handleGridChange(idx, "p25", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-3 py-2 text-center"><input type="number" value={s.pInt} onChange={(e) => handleGridChange(idx, "pInt", e.target.value)} className="w-20 text-center p-2 text-base font-bold border border-teal-400 bg-teal-50 text-teal-900 rounded focus:border-teal-600 focus:ring-2 focus:ring-teal-200 outline-none shadow-inner" /></td></>)}
-                          {gridType === "internal" && templateMode === "STANDARD" && gridPaperType === "INTEGRATED" && (<><td className="px-2 py-2 text-center border-r"><input type="number" value={s.iUt1} onChange={(e) => handleGridChange(idx, "iUt1", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.iUt2} onChange={(e) => handleGridChange(idx, "iUt2", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.iUt3} onChange={(e) => handleGridChange(idx, "iUt3", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.iUtT} onChange={(e) => handleGridChange(idx, "iUtT", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.iUtEq} onChange={(e) => handleGridChange(idx, "iUtEq", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.iUt} onChange={(e) => handleGridChange(idx, "iUt", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="text" value={s.iTitle} onChange={(e) => handleGridChange(idx, "iTitle", e.target.value)} className="w-48 p-2 text-sm border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" placeholder="Topic..." /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.iDress} onChange={(e) => handleGridChange(idx, "iDress", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.iPres} onChange={(e) => handleGridChange(idx, "iPres", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.iDisc} onChange={(e) => handleGridChange(idx, "iDisc", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.iSemMarks} onChange={(e) => handleGridChange(idx, "iSemMarks", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.iInt75} onChange={(e) => handleGridChange(idx, "iInt75", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded outline-none bg-teal-50 text-teal-800 shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.iEx1} onChange={(e) => handleGridChange(idx, "iEx1", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.iEx2} onChange={(e) => handleGridChange(idx, "iEx2", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.iEx3} onChange={(e) => handleGridChange(idx, "iEx3", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.iEx4} onChange={(e) => handleGridChange(idx, "iEx4", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.iEx5} onChange={(e) => handleGridChange(idx, "iEx5", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.iExAvg} onChange={(e) => handleGridChange(idx, "iExAvg", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.iEx75} onChange={(e) => handleGridChange(idx, "iEx75", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-2 py-2 text-center border-r"><input type="number" value={s.iModel} onChange={(e) => handleGridChange(idx, "iModel", e.target.value)} className="w-16 text-center p-2 text-sm font-bold border border-gray-300 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none shadow-inner" /></td><td className="px-3 py-2 text-center"><input type="number" value={s.iIntFinal} onChange={(e) => handleGridChange(idx, "iIntFinal", e.target.value)} className="w-20 text-center p-2 text-base font-bold border border-teal-400 bg-teal-100 text-teal-900 rounded focus:border-teal-600 focus:ring-2 focus:ring-teal-300 outline-none shadow-inner" /></td></>)}
-                          {gridType === "external" && (<td className="px-4 py-2 text-center"><input type="number" value={s.extMarks} onChange={(e) => handleGridChange(idx, "extMarks", e.target.value)} className="w-32 text-center p-2 text-base border border-teal-400 bg-teal-50 font-bold rounded focus:border-teal-600 focus:ring-2 focus:ring-teal-200 outline-none shadow-inner" placeholder="0-100" /></td>)}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                <div className="flex justify-between mb-6"><h2 className="text-lg font-bold text-gray-800">Upload Internal Marks (Excel)</h2></div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Department</label>
+                    <select value={dept} onChange={(e) => setDept(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md font-bold text-gray-700 bg-white">
+                      <option value="ALL">ALL DEPARTMENTS</option>
+                      {DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Semester</label>
+                    <select value={sem} onChange={(e) => setSem(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md font-bold text-gray-700 bg-white">
+                      <option value="ALL">ALL SEMESTERS</option>
+                      {[1, 2, 3, 4, 5, 6, 7, 8, 99].map((n) => <option key={n} value={n}>{n === 99 ? "Graduated 🎓" : `Semester ${n}`}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Regulation</label>
+                    <select value={reg} onChange={(e) => setReg(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md font-bold text-gray-700 bg-white">
+                      <option value="ALL">ALL REGULATIONS</option>
+                      <option value="2024">Regulation 2024</option>
+                      <option value="2021">Regulation 2021</option>
+                      <option value="2017">Regulation 2017</option>
+                    </select>
+                  </div>
                 </div>
-                <div className="p-4 bg-slate-100 border-t border-slate-300 flex justify-end"><button onClick={saveGridData} className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-10 rounded-lg shadow-lg transition-transform active:scale-95 flex items-center gap-2 text-lg tracking-wide"><span>{loading ? "Saving..." : "💾 Upload to Server Engine"}</span></button></div>
-              </div>
-            )}
+                <div className="mb-6"><label className="block text-xs font-bold text-gray-500 uppercase mb-3">Select Paper Type</label><div className="flex gap-4"><button onClick={() => fetchSubjects("THEORY")} className="flex-1 py-2 rounded-lg border font-medium text-sm">📘 Theory</button><button onClick={() => fetchSubjects("PRACTICAL")} className="flex-1 py-2 rounded-lg border font-medium text-sm">🧪 Practical</button><button onClick={() => fetchSubjects("INTEGRATED")} className="flex-1 py-2 rounded-lg border font-medium text-sm">🔀 Integrated</button></div></div>
+                {paperType && (<motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-4 bg-slate-50 p-4 rounded-lg border border-slate-200"><div><label className="block text-xs font-bold text-gray-500 uppercase mb-2">Select Subject</label><select value={selectedSubject} onChange={(e) => setSelectedSubject(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md bg-white text-sm">{subjectList.map((s) => <option key={s.subjectCode} value={s.subjectCode}>{s.subjectCode} - {s.subjectName}</option>)}</select></div><div><label className="block text-xs font-bold text-gray-500 uppercase mb-2">Upload Internal Excel</label><input type="file" onChange={(e) => setInternalFile(e.target.files[0])} className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:bg-indigo-600 file:text-white" accept=".xlsx, .xls, .csv" /></div><button onClick={handleInternalUpload} disabled={loading} className="w-full py-2 rounded-lg font-bold text-white bg-indigo-600 hover:bg-indigo-700">🚀 Upload Internals</button></motion.div>)}
+            </div>
+            <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-100"><h2 className="text-lg font-bold mb-4 text-gray-800">Upload External Marks (Excel)</h2><p className="text-sm text-gray-500 mb-4">Upload the final university external marks sheet.</p><input type="file" onChange={handleExternalUpload} accept=".xlsx, .csv" className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:bg-teal-50 file:text-teal-700" /></div>
           </motion.div>
         )}
 

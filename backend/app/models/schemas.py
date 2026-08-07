@@ -34,6 +34,7 @@ class SubjectModel(BaseModel):
     p: Optional[int] = 0
     credits: Optional[int] = 0
     paperType: Optional[str] = "THEORY"
+    regulation: Optional[str] = None
 
 class StudentSubjectModel(BaseModel):
     id: Optional[str] = None

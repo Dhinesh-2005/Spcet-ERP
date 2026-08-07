@@ -30,6 +30,24 @@ export function readFirstSheet(file, onJSON) {
   reader.readAsArrayBuffer(file);
 }
 
+export function readAllSheets(file, onJSON) {
+  const reader = new FileReader();
+  reader.onload = (evt) => {
+    const data = new Uint8Array(evt.target.result);
+    const wb = XLSX.read(data, { type: "array", cellDates: true });
+    let allRows = [];
+    wb.SheetNames.forEach((sheetName) => {
+      const ws = wb.Sheets[sheetName];
+      const json = XLSX.utils.sheet_to_json(ws, { defval: "", raw: false, dateNF: "dd-mm-yyyy" });
+      if (Array.isArray(json)) {
+        allRows = allRows.concat(json);
+      }
+    });
+    onJSON(allRows);
+  };
+  reader.readAsArrayBuffer(file);
+}
+
 export function mergeResults(rows) {
   const map = {};
   rows.forEach((r) => {
