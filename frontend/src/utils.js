@@ -232,29 +232,76 @@ export const exportUnitTestPaperDocx = async (config) => {
 
     const safeSubject = (unitHeader.subject || "UnitTest").replace(/[^a-zA-Z0-9]/g, "_").replace(/_+/g, "_").substring(0, 15);
 
-    const marksArray = (coDistribution && coDistribution.marks && coDistribution.marks.length > 0) ? coDistribution.marks : ['-','-','-','-','-','-'];
-    const percArray = (coDistribution && (coDistribution.perc || coDistribution.percentage) && (coDistribution.perc || coDistribution.percentage).length > 0) ? (coDistribution.perc || coDistribution.percentage) : ['-','-','-','-','-','-'];
+    const is2024 = (unitHeader.regulations || "").includes("2024");
+
+    // Calculate total marks of ALL questions per CO (including choice options A & B)
+    const coMarks = { CO1: 0, CO2: 0, CO3: 0, CO4: 0, CO5: 0, CO6: 0 };
+    (unitPartA || []).forEach(q => {
+      const co = (q.co || "").toUpperCase().trim();
+      const m = parseInt(q.marks || "2", 10);
+      if (co in coMarks) coMarks[co] += isNaN(m) ? 2 : m;
+    });
+
+    (unitPartB || []).forEach((q, idx) => {
+      const defaultBMark = is2024 ? (q.qNo === 8 || idx === 2 ? 8 : 16) : 13;
+      if (q.a && q.b) {
+        const ma = parseInt(q.a.marks || defaultBMark, 10);
+        const coa = (q.a.co || "").toUpperCase().trim();
+        if (coa in coMarks) coMarks[coa] += isNaN(ma) ? defaultBMark : ma;
+
+        const mb = parseInt(q.b.marks || defaultBMark, 10);
+        const cob = (q.b.co || "").toUpperCase().trim();
+        if (cob in coMarks) coMarks[cob] += isNaN(mb) ? defaultBMark : mb;
+      } else {
+        const m = parseInt(q.marks || defaultBMark, 10);
+        const co = (q.co || "").toUpperCase().trim();
+        if (co in coMarks) coMarks[co] += isNaN(m) ? defaultBMark : m;
+      }
+    });
+
+    if (!is2024 && unitPartC) {
+      (unitPartC || []).forEach(q => {
+        if (q.a && q.b) {
+          const ma = parseInt(q.a.marks || 14, 10);
+          const coa = (q.a.co || "").toUpperCase().trim();
+          if (coa in coMarks) coMarks[coa] += isNaN(ma) ? 14 : ma;
+
+          const mb = parseInt(q.b.marks || 14, 10);
+          const cob = (q.b.co || "").toUpperCase().trim();
+          if (cob in coMarks) coMarks[cob] += isNaN(mb) ? 14 : mb;
+        } else {
+          const m = parseInt(q.marks || 14, 10);
+          const co = (q.co || "").toUpperCase().trim();
+          if (co in coMarks) coMarks[co] += isNaN(m) ? 14 : m;
+        }
+      });
+    }
+
+    const totalCoMarks = Object.values(coMarks).reduce((s, v) => s + v, 0);
+    const coKeys = ["CO1", "CO2", "CO3", "CO4", "CO5", "CO6"];
+    const marksArray = coKeys.map(k => coMarks[k] > 0 ? String(coMarks[k]) : "-");
+    const percArray  = coKeys.map(k => (coMarks[k] === 0 || totalCoMarks === 0) ? "-" : String(Math.round((coMarks[k] / totalCoMarks) * 100)));
 
     const noBorders = { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE }, insideHorizontal: { style: BorderStyle.NONE }, insideVertical: { style: BorderStyle.NONE } };
     const createCell = (text, width = 10, bold = false, align = AlignmentType.CENTER) => new TableCell({ width: { size: width, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: (text ?? "").toString(), bold })], alignment: align, spacing: { before: 150, after: 150 } })] });
     
     // Register box: 40% label + 12 * 5% cells = 100% total
     const regBoxCells = Array.from({ length: 12 }).map(() => new TableCell({ width: { size: 5, type: WidthType.PERCENTAGE }, children: [new Paragraph({ text: " ", spacing: { before: 150, after: 150 } })] }));
-    
-    const is2024 = (unitHeader.regulations || "").includes("2024");
 
     // Helper: build an image row spanning the full table width (centered)
     const makeImageRow = async (imageData, width = 210, height = 176) => {
-      if (!imageData || !imageData.base64) return null;
+      if (!imageData) return null;
+      const b64DataUrl = typeof imageData === "string" ? imageData : (imageData.base64 || imageData.url || "");
+      if (!b64DataUrl) return null;
       try {
         // Strip data URL prefix to get raw base64
-        const b64 = imageData.base64.split(',')[1] || imageData.base64;
+        const b64 = b64DataUrl.includes(',') ? b64DataUrl.split(',')[1] : b64DataUrl;
         const binary = atob(b64);
         const bytes = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
         const buffer = bytes.buffer;
         // Determine image type from data URL
-        const mimeMatch = imageData.base64.match(/data:(image\/[^;]+)/);
+        const mimeMatch = b64DataUrl.match(/data:(image\/[^;]+)/);
         const ext = mimeMatch ? mimeMatch[1].split('/')[1] : 'png';
         const typeMap = { jpeg: 'jpg', jpg: 'jpg', png: 'png', gif: 'gif', bmp: 'bmp', webp: 'webp' };
         const imgType = typeMap[ext] || 'png';
@@ -272,14 +319,15 @@ export const exportUnitTestPaperDocx = async (config) => {
     
     const partBRows = [];
     for (const q of (unitPartB || [])) {
+      const defaultMark = is2024 ? (q.qNo === 8 ? "8" : "16") : "13";
       if (q.a && q.b) {
-        partBRows.push(new TableRow({ children: [createCell(`${q.qNo}.a.`, 8), createCell(q.a.question, 64, false, AlignmentType.LEFT), createCell(q.a.marks || (is2024 ? "16" : "13"), 8), createCell(q.a.co || "CO1", 10), createCell(q.a.kLevel || "K3", 10)] }));
+        partBRows.push(new TableRow({ children: [createCell(`${q.qNo}.a.`, 8), createCell(q.a.question, 64, false, AlignmentType.LEFT), createCell(q.a.marks || defaultMark, 8), createCell(q.a.co || "CO1", 10), createCell(q.a.kLevel || "K3", 10)] }));
         if (q.a.image) { const imgRow = await makeImageRow(q.a.image, 210, 176); if (imgRow) partBRows.push(imgRow); }
-        partBRows.push(new TableRow({ children: [createCell("", 8), createCell("(OR)", 64, true, AlignmentType.CENTER), createCell("", 8), createCell("", 10), createCell("", 10)] }));
-        partBRows.push(new TableRow({ children: [createCell(`${q.qNo}.b.`, 8), createCell(q.b.question, 64, false, AlignmentType.LEFT), createCell(q.b.marks || (is2024 ? "16" : "13"), 8), createCell(q.b.co || "CO1", 10), createCell(q.b.kLevel || "K3", 10)] }));
+        partBRows.push(new TableRow({ children: [createCell("", 8), createCell("OR", 64, true, AlignmentType.CENTER), createCell("", 8), createCell("", 10), createCell("", 10)] }));
+        partBRows.push(new TableRow({ children: [createCell(`${q.qNo}.b.`, 8), createCell(q.b.question, 64, false, AlignmentType.LEFT), createCell(q.b.marks || defaultMark, 8), createCell(q.b.co || "CO1", 10), createCell(q.b.kLevel || "K3", 10)] }));
         if (q.b.image) { const imgRow = await makeImageRow(q.b.image, 210, 176); if (imgRow) partBRows.push(imgRow); }
       } else {
-        partBRows.push(new TableRow({ children: [createCell(q.qNo, 5), createCell(q.question, 67, false, AlignmentType.LEFT), createCell(q.marks, 8), createCell(q.co, 10), createCell(q.kLevel, 10)] }));
+        partBRows.push(new TableRow({ children: [createCell(q.qNo, 5), createCell(q.question, 67, false, AlignmentType.LEFT), createCell(q.marks || defaultMark, 8), createCell(q.co, 10), createCell(q.kLevel, 10)] }));
         if (q.image) { const imgRow = await makeImageRow(q.image, 210, 176); if (imgRow) partBRows.push(imgRow); }
       }
     }
@@ -290,7 +338,7 @@ export const exportUnitTestPaperDocx = async (config) => {
         if (q.a && q.b) {
           partCRows.push(new TableRow({ children: [createCell(`${q.qNo}.a.`, 8), createCell(q.a.question, 64, false, AlignmentType.LEFT), createCell(q.a.marks || "14", 8), createCell(q.a.co || "CO1", 10), createCell(q.a.kLevel || "K4", 10)] }));
           if (q.a.image) { const imgRow = await makeImageRow(q.a.image, 210, 176); if (imgRow) partCRows.push(imgRow); }
-          partCRows.push(new TableRow({ children: [createCell("", 8), createCell("(OR)", 64, true, AlignmentType.CENTER), createCell("", 8), createCell("", 10), createCell("", 10)] }));
+          partCRows.push(new TableRow({ children: [createCell("", 8), createCell("OR", 64, true, AlignmentType.CENTER), createCell("", 8), createCell("", 10), createCell("", 10)] }));
           partCRows.push(new TableRow({ children: [createCell(`${q.qNo}.b.`, 8), createCell(q.b.question, 64, false, AlignmentType.LEFT), createCell(q.b.marks || "14", 8), createCell(q.b.co || "CO1", 10), createCell(q.b.kLevel || "K4", 10)] }));
           if (q.b.image) { const imgRow = await makeImageRow(q.b.image, 210, 176); if (imgRow) partCRows.push(imgRow); }
         } else {
@@ -343,10 +391,10 @@ export const exportUnitTestPaperDocx = async (config) => {
       new Paragraph({ children: [new TextRun({ text: unitHeader.ciaOption || "CIA - 1", bold: true, size: 20 })], alignment: AlignmentType.CENTER }),
       new Paragraph({ children: [new TextRun({ text: unitHeader.department || "", size: 20 })], alignment: AlignmentType.CENTER }),
       ...(unitHeader.commonBranches && unitHeader.commonBranches.trim() ? [
-        new Paragraph({ children: [new TextRun({ text: `Common to Branches ${unitHeader.commonBranches.trim()}`, size: 18 })], alignment: AlignmentType.CENTER })
+        new Paragraph({ children: [new TextRun({ text: `(Common to: ${unitHeader.commonBranches.trim()})`, size: 18 })], alignment: AlignmentType.CENTER })
       ] : []),
       new Paragraph({ children: [new TextRun({ text: unitHeader.subject || "", bold: true, size: 22 })], alignment: AlignmentType.CENTER }),
-      new Paragraph({ children: [new TextRun({ text: unitHeader.regulations || "(Regulations 2024)", size: 18 })], alignment: AlignmentType.CENTER }),
+      new Paragraph({ children: [new TextRun({ text: unitHeader.regulations || "(Regulations 2021)", size: 18 })], alignment: AlignmentType.CENTER }),
       new Paragraph({ text: " ", spacing: { after: 100 } }),
       new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: noBorders, rows: [new TableRow({ children: [new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Duration: " + (unitHeader.duration || "2:00 hours"), bold: true, size: 18 })] })] }), new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Max. Marks: " + (unitHeader.maxMarks || "50"), bold: true, size: 18 })], alignment: AlignmentType.RIGHT })] })] })] }),
       new Paragraph({ children: [new TextRun({ text: "Answer ALL Questions", bold: true, size: 20 })], alignment: AlignmentType.CENTER, spacing: { before: 150, after: 150 } }),
@@ -364,11 +412,11 @@ export const exportUnitTestPaperDocx = async (config) => {
 
     docChildren.push(
       new Paragraph({ text: " ", spacing: { after: 150 } }),
+      new Paragraph({ children: [new TextRun({ text: "Distribution of CO's (Percentage wise)", bold: true, size: 18 })], alignment: AlignmentType.CENTER, spacing: { before: 200, after: 100 } }),
       new Table({ 
         width: { size: 100, type: WidthType.PERCENTAGE }, 
         borders: { top: { style: BorderStyle.SINGLE, size: 1 }, bottom: { style: BorderStyle.SINGLE, size: 1 }, left: { style: BorderStyle.SINGLE, size: 1 }, right: { style: BorderStyle.SINGLE, size: 1 }, insideHorizontal: { style: BorderStyle.SINGLE, size: 1 }, insideVertical: { style: BorderStyle.SINGLE, size: 1 } }, 
         rows: [
-          new TableRow({ children: [new TableCell({ columnSpan: 7, children: [new Paragraph({ children: [new TextRun({ text: "Distribution of CO's (Percentage wise)", bold: true, size: 18 })], alignment: AlignmentType.CENTER, spacing: { before: 150, after: 150 } })] })] }),
           new TableRow({ children: [createCell("Evaluation", 16, true), createCell("CO1", 14, true), createCell("CO2", 14, true), createCell("CO3", 14, true), createCell("CO4", 14, true), createCell("CO5", 14, true), createCell("CO6", 14, true)] }),
           new TableRow({ children: [createCell("Marks", 16, true), createCell(marksArray[0], 14), createCell(marksArray[1], 14), createCell(marksArray[2], 14), createCell(marksArray[3], 14), createCell(marksArray[4], 14), createCell(marksArray[5], 14)] }),
           new TableRow({ children: [createCell("%", 16, true), createCell(percArray[0], 14), createCell(percArray[1], 14), createCell(percArray[2], 14), createCell(percArray[3], 14), createCell(percArray[4], 14), createCell(percArray[5], 14)] })

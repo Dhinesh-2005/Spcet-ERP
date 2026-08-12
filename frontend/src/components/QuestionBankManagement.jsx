@@ -395,7 +395,18 @@ export default function QuestionBankManagement({ user }) {
                     </td>
                     <td className="p-3 font-bold text-indigo-700">{q.subjectCode}</td>
                     <td className="p-3 font-semibold text-slate-700">{q.unit}</td>
-                    <td className="p-3 text-slate-800 whitespace-pre-wrap">{q.question}</td>
+                    <td className="p-3 text-slate-800 whitespace-pre-wrap">
+                      <div>{q.question}</div>
+                      {q.image && (
+                        <div className="mt-2">
+                          <img
+                            src={typeof q.image === "string" ? q.image : q.image.base64}
+                            alt="Question Diagram"
+                            className="h-16 w-auto max-w-[140px] rounded border border-slate-200 object-contain bg-slate-50 p-1 shadow-sm"
+                          />
+                        </div>
+                      )}
+                    </td>
                     <td className="p-3 text-center font-bold text-slate-700">{q.part}</td>
                     <td className="p-3 text-center font-bold text-teal-700">{q.marks}</td>
                     <td className="p-3 text-center bg-indigo-50 font-bold text-indigo-800 rounded">

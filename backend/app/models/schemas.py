@@ -131,6 +131,7 @@ class QuestionBankModel(BaseModel):
     marks: float
     co: str
     kLevel: Optional[str] = "K1"
+    image: Optional[Any] = None
     createdAt: Optional[str] = None
     updatedAt: Optional[str] = None
 
