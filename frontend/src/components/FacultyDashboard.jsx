@@ -371,6 +371,8 @@ export default function FacultyDashboard({ user, onLogout }) {
         newPartA = unitPartA2024.map((item, i) => ({
           ...item,
           question: data.partA[i]?.question || item.question,
+          equation: data.partA[i]?.equation || "",
+          hasEquation: data.partA[i]?.hasEquation || false,
           kLevel:   data.partA[i]?.kLevel   || item.kLevel,
           co:       data.partA[i]?.co        || defaultCo,
           marks:    data.partA[i]?.marks    ? String(data.partA[i].marks) : item.marks,
@@ -390,6 +392,8 @@ export default function FacultyDashboard({ user, onLogout }) {
             a: {
               ...item.a,
               question: qA?.question || item.a.question,
+              equation: qA?.equation || "",
+              hasEquation: qA?.hasEquation || false,
               kLevel: qA?.kLevel || item.a.kLevel,
               co: qA?.co || defaultCo,
               marks: qA?.marks ? String(Math.round(Number(qA.marks))) : defaultMark,
@@ -398,6 +402,8 @@ export default function FacultyDashboard({ user, onLogout }) {
             b: {
               ...item.b,
               question: qB?.question || item.b.question,
+              equation: qB?.equation || "",
+              hasEquation: qB?.hasEquation || false,
               kLevel: qB?.kLevel || item.b.kLevel,
               co: qB?.co || defaultCo,
               marks: qB?.marks ? String(Math.round(Number(qB.marks))) : defaultMark,
@@ -417,6 +423,8 @@ export default function FacultyDashboard({ user, onLogout }) {
         newPartA = unitPartA2021.map((item, i) => ({
           ...item,
           question: data.partA[i]?.question || item.question,
+          equation: data.partA[i]?.equation || "",
+          hasEquation: data.partA[i]?.hasEquation || false,
           kLevel:   data.partA[i]?.kLevel   || item.kLevel,
           co:       data.partA[i]?.co        || defaultCo,
           marks:    data.partA[i]?.marks    ? String(data.partA[i].marks) : item.marks,
@@ -428,8 +436,8 @@ export default function FacultyDashboard({ user, onLogout }) {
       if (data.partB && data.partB.length > 0) {
         newPartB = unitPartB2021.map((item, i) => ({
           ...item,
-          a: { ...item.a, question: data.partB[i*2]?.question   || item.a.question, kLevel: data.partB[i*2]?.kLevel   || item.a.kLevel, co: data.partB[i*2]?.co   || defaultCo, image: data.partB[i*2]?.image !== undefined ? data.partB[i*2].image : item.a.image },
-          b: { ...item.b, question: data.partB[i*2+1]?.question || item.b.question, kLevel: data.partB[i*2+1]?.kLevel || item.b.kLevel, co: data.partB[i*2+1]?.co || defaultCo, image: data.partB[i*2+1]?.image !== undefined ? data.partB[i*2+1].image : item.b.image },
+          a: { ...item.a, question: data.partB[i*2]?.question || item.a.question, equation: data.partB[i*2]?.equation || "", hasEquation: data.partB[i*2]?.hasEquation || false, kLevel: data.partB[i*2]?.kLevel || item.a.kLevel, co: data.partB[i*2]?.co || defaultCo, image: data.partB[i*2]?.image !== undefined ? data.partB[i*2].image : item.a.image },
+          b: { ...item.b, question: data.partB[i*2+1]?.question || item.b.question, equation: data.partB[i*2+1]?.equation || "", hasEquation: data.partB[i*2+1]?.hasEquation || false, kLevel: data.partB[i*2+1]?.kLevel || item.b.kLevel, co: data.partB[i*2+1]?.co || defaultCo, image: data.partB[i*2+1]?.image !== undefined ? data.partB[i*2+1].image : item.b.image },
         }));
         setUnitPartB2021(newPartB);
       }
@@ -437,8 +445,8 @@ export default function FacultyDashboard({ user, onLogout }) {
       if (data.partC && data.partC.length > 0) {
         newPartC = unitPartC2021.map((item, i) => ({
           ...item,
-          a: { ...item.a, question: data.partC[i*2]?.question   || item.a.question, kLevel: data.partC[i*2]?.kLevel   || item.a.kLevel, co: data.partC[i*2]?.co   || defaultCo, image: data.partC[i*2]?.image !== undefined ? data.partC[i*2].image : item.a.image },
-          b: { ...item.b, question: data.partC[i*2+1]?.question || item.b.question, kLevel: data.partC[i*2+1]?.kLevel || item.b.kLevel, co: data.partC[i*2+1]?.co || defaultCo, image: data.partC[i*2+1]?.image !== undefined ? data.partC[i*2+1].image : item.b.image },
+          a: { ...item.a, question: data.partC[i*2]?.question || item.a.question, equation: data.partC[i*2]?.equation || "", hasEquation: data.partC[i*2]?.hasEquation || false, kLevel: data.partC[i*2]?.kLevel || item.a.kLevel, co: data.partC[i*2]?.co || defaultCo, image: data.partC[i*2]?.image !== undefined ? data.partC[i*2].image : item.a.image },
+          b: { ...item.b, question: data.partC[i*2+1]?.question || item.b.question, equation: data.partC[i*2+1]?.equation || "", hasEquation: data.partC[i*2+1]?.hasEquation || false, kLevel: data.partC[i*2+1]?.kLevel || item.b.kLevel, co: data.partC[i*2+1]?.co || defaultCo, image: data.partC[i*2+1]?.image !== undefined ? data.partC[i*2+1].image : item.b.image },
         }));
         setUnitPartC2021(newPartC);
       }

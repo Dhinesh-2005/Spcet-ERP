@@ -360,6 +360,127 @@ def _normalize_co(co_str: str) -> str:
         return f"CO{num_match.group(0)}"
     return co_str if co_str else "CO1"
 
+def process_question_equation(question_text: str):
+    """
+    Detects if question contains an equation/math formula,
+    converts mathematical patterns to LaTeX/KaTeX, protects CO1-CO6 labels,
+    and returns a structured dict with normal text and equation parts.
+    """
+    if not question_text:
+        return {"question": "", "equation": "", "hasEquation": False, "latex": ""}
+
+    raw = str(question_text).strip()
+    
+    # 1. Protect CO tokens (CO1 - CO99) so they are NEVER converted to subscripts or equations
+    co_placeholders = {}
+    def _preserve_co(match):
+        token = match.group(0)
+        placeholder = f"__CO_TOKEN_{len(co_placeholders)}__"
+        co_placeholders[placeholder] = token
+        return placeholder
+
+    protected_text = re.sub(r"\bCO[0-9]+\b", _preserve_co, raw)
+
+    # 2. Check for mathematical / chemical equation patterns
+    equation_symbols = [
+        r"=", r"√", r"∫", r"Σ", r"π", r"α", r"β", r"θ", r"λ", r"\^",
+        r"²", r"³", r"⁻", r"±", r"≠", r"≤", r"≥", r"dy/dx", r"d/dx"
+    ]
+    
+    has_eq_symbol = any(re.search(pat, protected_text) for pat in equation_symbols)
+    has_exponent_pattern = bool(re.search(r"\b[a-zA-Z](\d+)\b", protected_text))
+    chem_matches = [m.group(0) for m in re.finditer(r"\b[A-Z][a-z]?\d+(?:[A-Z][a-z]?\d*)*\b", protected_text) if "__CO_TOKEN_" not in m.group(0)]
+    has_chem_pattern = len(chem_matches) > 0
+
+    is_equation = has_eq_symbol or has_exponent_pattern or has_chem_pattern
+
+    if not is_equation:
+        final_text = protected_text
+        for ph, orig in co_placeholders.items():
+            final_text = final_text.replace(ph, orig)
+        return {
+            "question": final_text,
+            "equation": "",
+            "hasEquation": False,
+            "latex": ""
+        }
+
+    # 3. Separate text prefix from equation part
+    text_part = ""
+    eq_part = ""
+
+    triggers = [
+        r"calculate the value of", r"calculate the area using", r"find the value of",
+        r"find the area using", r"solve the equation", r"prove that", r"the value of",
+        r"calculate", r"determine", r"evaluate", r"solve", r"find", r"using", r"where", r"what is"
+    ]
+
+    found_split = False
+    for trig in triggers:
+        match = re.search(r"^(.*?\b" + trig + r"\s+)(.+)$", protected_text, re.IGNORECASE)
+        if match:
+            rest = match.group(2).strip()
+            if any(re.search(pat, rest) for pat in equation_symbols) or re.search(r"\b[a-zA-Z]\d+\b", rest) or len(chem_matches) > 0:
+                text_part = match.group(1).strip()
+                eq_part = rest
+                found_split = True
+                break
+
+    if not found_split:
+        if "=" in protected_text:
+            idx = protected_text.find("=")
+            before_eq = protected_text[:idx]
+            match_start = re.search(r"^(.*?)([a-zA-Z0-9_\(\)\s\+\-\*\^²/√∫Σπ]+)$", before_eq)
+            if match_start and match_start.group(1).strip():
+                text_part = match_start.group(1).strip()
+                eq_part = (match_start.group(2) + protected_text[idx:]).strip()
+            else:
+                eq_part = protected_text.strip()
+        else:
+            eq_part = protected_text.strip()
+
+    # 4. Convert eq_part to LaTeX
+    converted_eq = eq_part
+
+    # Exponents x2 -> x^2, y3 -> y^3
+    converted_eq = re.sub(r"\b([a-zA-Z])(\d+)\b", r"\1^\2", converted_eq)
+    converted_eq = re.sub(r"²", "^2", converted_eq)
+    converted_eq = re.sub(r"³", "^3", converted_eq)
+    converted_eq = re.sub(r"10⁻²", "10^{-2}", converted_eq)
+    converted_eq = re.sub(r"10\^-2", "10^{-2}", converted_eq)
+
+    # Math symbols
+    converted_eq = converted_eq.replace("√", r"\sqrt")
+    converted_eq = converted_eq.replace("∫", r"\int ")
+    converted_eq = converted_eq.replace("Σ", r"\sum ")
+    converted_eq = converted_eq.replace("π", r"\pi ")
+    converted_eq = converted_eq.replace("α", r"\alpha ")
+    converted_eq = converted_eq.replace("β", r"\beta ")
+    converted_eq = converted_eq.replace("θ", r"\theta ")
+    converted_eq = converted_eq.replace("λ", r"\lambda ")
+
+    # Chemical formula conversion for non-CO tokens
+    def _convert_chem(match):
+        formula = match.group(0)
+        if "__CO_TOKEN_" in formula:
+            return formula
+        return re.sub(r"([A-Za-z])(\d+)", r"\1_\2", formula)
+
+    converted_eq = re.sub(r"\b[A-Z][a-z]?\d+(?:[A-Z][a-z]?\d*)*\b", _convert_chem, converted_eq)
+
+    # Restore protected CO tokens
+    for ph, orig in co_placeholders.items():
+        text_part = text_part.replace(ph, orig)
+        converted_eq = converted_eq.replace(ph, orig)
+    display_question = raw
+
+    return {
+        "question": display_question,
+        "equation": converted_eq,
+        "hasEquation": True if converted_eq else False,
+        "latex": f"{text_part} ${converted_eq}$".strip() if text_part else f"${converted_eq}$"
+    }
+
 def _normalize_part(part_str: str, marks_val: float) -> str:
     part_str = _clean_str(part_str).upper()
     if "A" in part_str:
@@ -481,13 +602,17 @@ async def upload_question_bank(
 
         existing_map.add(norm_q)
 
+        processed_eq = process_question_equation(question_text)
         doc = {
             "subjectCode": subjectCode,
             "subjectName": subjectName,
             "regulation": regulation,
             "semester": semester,
             "unit": unit_val,
-            "question": question_text,
+            "question": processed_eq["question"],
+            "equation": processed_eq["equation"],
+            "hasEquation": processed_eq["hasEquation"],
+            "latex": processed_eq["latex"],
             "part": part_val,
             "marks": marks_val,
             "co": co_val,
@@ -613,9 +738,13 @@ async def parse_and_generate_paper(
             if u_match and u_match.group(0) != target_unit_num:
                 continue
 
+        processed_eq = process_question_equation(question_text)
         doc = {
             "unit": unit_val,
-            "question": question_text,
+            "question": processed_eq["question"],
+            "equation": processed_eq["equation"],
+            "hasEquation": processed_eq["hasEquation"],
+            "latex": processed_eq["latex"],
             "part": part_val,
             "marks": marks_val,
             "co": co_val,

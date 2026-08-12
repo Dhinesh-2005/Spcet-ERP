@@ -141,8 +141,16 @@ export const exportSemesterPaperDocx = async (config, templateType) => {
     const safeSubject = (header.subject || "Paper").replace(/[^a-zA-Z0-9]/g, "_").replace(/_+/g, "_").substring(0, 15);
 
     const noBorders = { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE }, insideHorizontal: { style: BorderStyle.NONE }, insideVertical: { style: BorderStyle.NONE } };
-    const createCell = (text, width = 10, bold = false, align = AlignmentType.CENTER) => new TableCell({ width: { size: width, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: (text ?? "").toString(), bold })], alignment: align, spacing: { before: 150, after: 150 } })] });
-    const createLeftCell = (text, width = 70, bold = false) => new TableCell({ width: { size: width, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: (text ?? "").toString(), bold })], spacing: { before: 150, after: 150 } })] });
+    const createCell = (text, width = 10, bold = false, align = AlignmentType.CENTER) => {
+      const lines = splitQuestionSubdivisions(text);
+      const paragraphs = lines.map(line => new Paragraph({ children: parseQuestionTextRuns(line, bold), alignment: align, spacing: { before: 100, after: 100 } }));
+      return new TableCell({ width: { size: width, type: WidthType.PERCENTAGE }, children: paragraphs });
+    };
+    const createLeftCell = (text, width = 70, bold = false) => {
+      const lines = splitQuestionSubdivisions(text);
+      const paragraphs = lines.map(line => new Paragraph({ children: parseQuestionTextRuns(line, bold), spacing: { before: 100, after: 100 } }));
+      return new TableCell({ width: { size: width, type: WidthType.PERCENTAGE }, children: paragraphs });
+    };
     
     // Register box: 40% label + 12 * 5% cells = 100% total
     const regBoxCells = Array.from({ length: 12 }).map(() => new TableCell({ width: { size: 5, type: WidthType.PERCENTAGE }, children: [new Paragraph({ text: " ", spacing: { before: 150, after: 150 } })] }));
@@ -225,6 +233,93 @@ export const exportSemesterPaperDocx = async (config, templateType) => {
   } catch(err) { alert("❌ Error creating document: " + err.message); }
 };
 
+export const splitQuestionSubdivisions = (rawText) => {
+  if (!rawText) return [""];
+  let text = String(rawText).trim();
+
+  // 1. If text already has newlines (\n), split by \n
+  if (text.includes("\n")) {
+    return text.split("\n").map(s => s.trim()).filter(Boolean);
+  }
+
+  // 2. Detect sub-divisions like a), b), c) or (a), (b), (c) or a., b., c. or i), ii), iii)
+  const hasA = /\b[aA][\)\.]|\([aA]\)|\b[iI][\)\.]|\([iI]\)/.test(text);
+  const hasB = /\b[bB][\)\.]|\([bB]\)|\b(?:ii|II)[\)\.]|\((?:ii|II)\)/.test(text);
+
+  if (hasA && hasB) {
+    let formatted = text;
+    // Add newline before a) or (a) or i) if main question text precedes it
+    formatted = formatted.replace(/\s*(\b[aA][\)\.]|\([aA]\)|\b[iI][\)\.]|\([iI]\))\s*/g, "\n$1 ");
+    // Add newline before b), c), d), e) / (b), (c) / ii), iii), iv)
+    const subDivRegex = /(?:\s*|(?<=\S))(\b[b-eB-E][\)\.]|\([b-eB-E]\)|\b(?:ii|iii|iv|v|II|III|IV|V)[\)\.]|\((?:ii|iii|iv|v|II|III|IV|V)\))\s*/g;
+    formatted = formatted.replace(subDivRegex, "\n$1 ");
+
+    return formatted.split("\n").map(s => s.trim()).filter(Boolean);
+  }
+
+  return [text];
+};
+
+export const parseQuestionTextRuns = (rawText, baseBold = false) => {
+  if (!rawText) return [new TextRun({ text: "", bold: baseBold })];
+  const text = String(rawText).trim();
+
+  // 1. If text is strictly a CO label (CO1-CO6) or K-Level (K1-K6) column cell, keep as plain text!
+  if (/^(?:CO[1-6]|K[1-6])$/i.test(text)) {
+    return [new TextRun({ text, bold: baseBold })];
+  }
+
+  const chemElements = "(?:H|He|Li|Be|B|C|N|O|F|Ne|Na|Mg|Al|Si|P|S|Cl|Ar|K|Ca|Sc|Ti|V|Cr|Mn|Fe|Co|Ni|Cu|Zn|Ga|Ge|As|Se|Br|Kr|Rb|Sr|Y|Zr|Nb|Mo|Tc|Ru|Rh|Pd|Ag|Cd|In|Sn|Sb|Te|I|Xe|Cs|Ba|La|Ce|Pr|Nd|Pm|Sm|Eu|Gd|Tb|Dy|Ho|Er|Tm|Yb|Lu|Hf|Ta|W|Re|Os|Ir|Pt|Au|Hg|Tl|Pb|Bi|Po|At|Rn|Fr|Ra|Ac|Th|Pa|U)";
+
+  // Master regex matching:
+  // Group 1 & 2: Chemical element(s) + 1-2 digits (e.g. CO4, H2, O2, SO4, C6) -> subScript
+  // Group 3: Caret exponent (e.g. ^2, ^-2) -> superScript
+  // Group 4: Unicode superscript (², ³) -> superScript
+  // Group 5 & 6: Math variable + number (e.g. x2, y3, a2, b2, c2) -> superScript
+  const masterRegex = new RegExp(
+    `(${chemElements}+)(\\d{1,2})|(?:\\^(\\d+|\\-[0-9]+))|([²³])|(?:([a-z])(\\d+))`,
+    "g"
+  );
+
+  const runs = [];
+  let lastIndex = 0;
+  let match;
+
+  while ((match = masterRegex.exec(text)) !== null) {
+    const matchIndex = match.index;
+    if (matchIndex > lastIndex) {
+      runs.push({ text: text.substring(lastIndex, matchIndex) });
+    }
+
+    if (match[1] !== undefined && match[2] !== undefined) {
+      // Chemical element(s) + number e.g. CO4 -> CO (normal), 4 (subscript)
+      runs.push({ text: match[1] });
+      runs.push({ text: match[2], subScript: true });
+    } else if (match[3] !== undefined) {
+      runs.push({ text: match[3], superScript: true });
+    } else if (match[4] !== undefined) {
+      const val = match[4] === "²" ? "2" : match[4] === "³" ? "3" : match[4];
+      runs.push({ text: val, superScript: true });
+    } else if (match[5] !== undefined && match[6] !== undefined) {
+      runs.push({ text: match[5] });
+      runs.push({ text: match[6], superScript: true });
+    }
+
+    lastIndex = masterRegex.lastIndex;
+  }
+
+  if (lastIndex < text.length) {
+    runs.push({ text: text.substring(lastIndex) });
+  }
+
+  return runs.map(r => new TextRun({
+    text: r.text,
+    bold: baseBold,
+    subScript: r.subScript || false,
+    superScript: r.superScript || false
+  }));
+};
+
 export const exportUnitTestPaperDocx = async (config) => {
   try {
     const { unitHeader, unitPartA, unitPartB, unitPartC, coDistribution } = config || {};
@@ -283,7 +378,11 @@ export const exportUnitTestPaperDocx = async (config) => {
     const percArray  = coKeys.map(k => (coMarks[k] === 0 || totalCoMarks === 0) ? "-" : String(Math.round((coMarks[k] / totalCoMarks) * 100)));
 
     const noBorders = { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE }, insideHorizontal: { style: BorderStyle.NONE }, insideVertical: { style: BorderStyle.NONE } };
-    const createCell = (text, width = 10, bold = false, align = AlignmentType.CENTER) => new TableCell({ width: { size: width, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: (text ?? "").toString(), bold })], alignment: align, spacing: { before: 150, after: 150 } })] });
+    const createCell = (text, width = 10, bold = false, align = AlignmentType.CENTER) => {
+      const lines = splitQuestionSubdivisions(text);
+      const paragraphs = lines.map(line => new Paragraph({ children: parseQuestionTextRuns(line, bold), alignment: align, spacing: { before: 100, after: 100 } }));
+      return new TableCell({ width: { size: width, type: WidthType.PERCENTAGE }, children: paragraphs });
+    };
     
     // Register box: 40% label + 12 * 5% cells = 100% total
     const regBoxCells = Array.from({ length: 12 }).map(() => new TableCell({ width: { size: 5, type: WidthType.PERCENTAGE }, children: [new Paragraph({ text: " ", spacing: { before: 150, after: 150 } })] }));
