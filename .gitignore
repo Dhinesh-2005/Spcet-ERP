@@ -1,24 +1,70 @@
+# =========================
 # Frontend
+# =========================
 frontend/node_modules/
 frontend/dist/
+
+# Frontend environment files
 frontend/.env
 frontend/.env.local
+frontend/.env.*.local
 
+
+# =========================
 # Backend
+# =========================
 backend/target/
-backend/.mvn/wrapper/
-backend/mvnw
-backend/mvnw.cmd
-backend/help.md
 
+# Python virtual environment
+backend/.venv/
+backend/venv/
+
+# Backend environment files
+backend/.env
+backend/.env.local
+
+
+# =========================
 # FastAPI Backend
-backend_fastapi/.env
-backend_fastapi/.venv
-backend_fastapi/__pycache__/
-backend_fastapi/app/__pycache__/
-backend_fastapi/app/routes/__pycache__/
-backend_fastapi/app/models/__pycache__/
-backend_fastapi/app/services/__pycache__/
-backend_fastapi/.pytest_cache
+# =========================
+backend_fastapi/.venv/
+backend_fastapi/venv/
 
+backend_fastapi/__pycache__/
+backend_fastapi/**/__pycache__/
+
+backend_fastapi/.pytest_cache/
+
+backend_fastapi/.env
+backend_fastapi/.env.local
+
+
+# =========================
+# Python
+# =========================
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+
+# =========================
+# Environment files
+# =========================
+.env
+.env.local
+.env.*.local
+
+
+# =========================
+# Build folders
+# =========================
+dist/
+build/
+
+
+# =========================
+# OS
+# =========================
 .DS_Store
+Thumbs.db
