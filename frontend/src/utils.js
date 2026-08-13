@@ -262,22 +262,69 @@ export const splitQuestionSubdivisions = (rawText) => {
 
 export const parseQuestionTextRuns = (rawText, baseBold = false) => {
   if (!rawText) return [new TextRun({ text: "", bold: baseBold })];
-  const text = String(rawText).trim();
+  let text = String(rawText).trim();
 
   // 1. If text is strictly a CO label (CO1-CO6) or K-Level (K1-K6) column cell, keep as plain text!
   if (/^(?:CO[1-6]|K[1-6])$/i.test(text)) {
     return [new TextRun({ text, bold: baseBold })];
   }
 
+  // 2. Pre-process LaTeX math commands into clean Unicode math expressions
+  // Derivatives & fractions: \frac{d^2y}{dx^2} -> d²y/dx², \frac{dy}{dx} -> dy/dx, \frac{a}{b} -> a/b
+  text = text.replace(/\\frac\{\\partial\^?(\d+)?\s*([a-zA-Z])\}\{\\partial\s*([a-zA-Z])\^?(\d+)?\}/g, (m, p1, v1, v2, p2) => `∂${p1 ? '²' : ''}${v1}/∂${v2}${p2 ? '²' : ''}`);
+  text = text.replace(/\\frac\{d\^?(\d+)?\s*([a-zA-Z])\}\{d([a-zA-Z])\^?(\d+)?\}/g, (m, p1, v1, v2, p2) => `d${p1 ? '²' : ''}${v1}/d${v2}${p2 ? '²' : ''}`);
+  text = text.replace(/\\frac\{([^{}]+)\}\{([^{}]+)\}/g, (m, num, den) => {
+    const cleanNum = num.length > 5 ? `(${num})` : num;
+    const cleanDen = den.length > 5 ? `(${den})` : den;
+    return `${cleanNum}/${cleanDen}`;
+  });
+
+  // Roots: \sqrt[n]{x} -> ⁿ√(x), \sqrt{x} -> √(x)
+  text = text.replace(/\\sqrt\[([^\]]+)\]\{([^{}]+)\}/g, (m, n, x) => `${n}√(${x})`);
+  text = text.replace(/\\sqrt\{([^{}]+)\}/g, (m, x) => `√(${x})`);
+  text = text.replace(/\\sqrt\s*([a-zA-Z0-9]+)/g, (m, x) => `√(${x})`);
+
+  // Integrals & Calculus: \int_a^b -> ∫_a^b, \iint -> ∬, \iiint -> ∭
+  text = text.replace(/\\iiint/g, "∭");
+  text = text.replace(/\\iint/g, "∬");
+  text = text.replace(/\\int/g, "∫");
+  text = text.replace(/\\partial/g, "∂");
+
+  // Summation, Product, Limit: \sum -> ∑, \prod -> ∏, \lim -> lim
+  text = text.replace(/\\sum/g, "∑");
+  text = text.replace(/\\prod/g, "∏");
+  text = text.replace(/\\lim_\{([^{}]+)\}/g, "lim_{$1}");
+  text = text.replace(/\\lim/g, "lim");
+  text = text.replace(/\\infty/g, "∞");
+
+  // Operators & Greek letters
+  text = text.replace(/\\pm/g, "±");
+  text = text.replace(/\\approx/g, "≈");
+  text = text.replace(/\\ne/g, "≠");
+  text = text.replace(/\\le/g, "≤");
+  text = text.replace(/\\ge/g, "≥");
+  text = text.replace(/\\cdot/g, "·");
+  text = text.replace(/\\to/g, "→");
+  text = text.replace(/\\pi/g, "π");
+  text = text.replace(/\\alpha/g, "α");
+  text = text.replace(/\\beta/g, "β");
+  text = text.replace(/\\theta/g, "θ");
+  text = text.replace(/\\lambda/g, "λ");
+  text = text.replace(/\\sigma/g, "σ");
+
+  // Trig & log functions: \sin -> sin, \cos -> cos, etc.
+  text = text.replace(/\\(sin|cos|tan|cot|sec|csc|log|ln)/g, "$1");
+  text = text.replace(/\\left|\\right/g, "");
+
   const chemElements = "(?:H|He|Li|Be|B|C|N|O|F|Ne|Na|Mg|Al|Si|P|S|Cl|Ar|K|Ca|Sc|Ti|V|Cr|Mn|Fe|Co|Ni|Cu|Zn|Ga|Ge|As|Se|Br|Kr|Rb|Sr|Y|Zr|Nb|Mo|Tc|Ru|Rh|Pd|Ag|Cd|In|Sn|Sb|Te|I|Xe|Cs|Ba|La|Ce|Pr|Nd|Pm|Sm|Eu|Gd|Tb|Dy|Ho|Er|Tm|Yb|Lu|Hf|Ta|W|Re|Os|Ir|Pt|Au|Hg|Tl|Pb|Bi|Po|At|Rn|Fr|Ra|Ac|Th|Pa|U)";
 
-  // Master regex matching:
-  // Group 1 & 2: Chemical element(s) + 1-2 digits (e.g. CO4, H2, O2, SO4, C6) -> subScript
-  // Group 3: Caret exponent (e.g. ^2, ^-2) -> superScript
-  // Group 4: Unicode superscript (², ³) -> superScript
-  // Group 5 & 6: Math variable + number (e.g. x2, y3, a2, b2, c2) -> superScript
+  // Regex matching:
+  // Group 1 & 2: Subscript with _{val} or chemical element + digits e.g. _{i=1}, H2, O2 -> subScript
+  // Group 3: Superscript with ^{val} or ^2 -> superScript
+  // Group 4: Unicode superscripts ², ³ -> superScript
+  // Group 5 & 6: Math variable + number e.g. x2 -> superScript
   const masterRegex = new RegExp(
-    `(${chemElements}+)(\\d{1,2})|(?:\\^(\\d+|\\-[0-9]+))|([²³])|(?:([a-z])(\\d+))`,
+    `_(?:\\{([^{}]+)\\}|([a-zA-Z0-9=+\\-]+))|\\^(?:\\{([^{}]+)\\}|([a-zA-Z0-9=+\\-]+))|(${chemElements}+)(\\d{1,2})|([²³])|(?:([a-z])(\\d+))`,
     "g"
   );
 
@@ -291,18 +338,22 @@ export const parseQuestionTextRuns = (rawText, baseBold = false) => {
       runs.push({ text: text.substring(lastIndex, matchIndex) });
     }
 
-    if (match[1] !== undefined && match[2] !== undefined) {
-      // Chemical element(s) + number e.g. CO4 -> CO (normal), 4 (subscript)
-      runs.push({ text: match[1] });
-      runs.push({ text: match[2], subScript: true });
-    } else if (match[3] !== undefined) {
-      runs.push({ text: match[3], superScript: true });
-    } else if (match[4] !== undefined) {
-      const val = match[4] === "²" ? "2" : match[4] === "³" ? "3" : match[4];
-      runs.push({ text: val, superScript: true });
+    if (match[1] !== undefined || match[2] !== undefined) {
+      // Subscript from _{...} or _val
+      runs.push({ text: match[1] || match[2], subScript: true });
+    } else if (match[3] !== undefined || match[4] !== undefined) {
+      // Superscript from ^{...} or ^val
+      runs.push({ text: match[3] || match[4], superScript: true });
     } else if (match[5] !== undefined && match[6] !== undefined) {
+      // Chemical element + number e.g. H2 -> H (normal), 2 (subscript)
       runs.push({ text: match[5] });
-      runs.push({ text: match[6], superScript: true });
+      runs.push({ text: match[6], subScript: true });
+    } else if (match[7] !== undefined) {
+      const val = match[7] === "²" ? "2" : match[7] === "³" ? "3" : match[7];
+      runs.push({ text: val, superScript: true });
+    } else if (match[8] !== undefined && match[9] !== undefined) {
+      runs.push({ text: match[8] });
+      runs.push({ text: match[9], superScript: true });
     }
 
     lastIndex = masterRegex.lastIndex;

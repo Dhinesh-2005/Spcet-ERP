@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import mammoth from "mammoth";
 import { API_BASE, exportSemesterPaperDocx, exportUnitTestPaperDocx } from "../utils";
+import FormattedQuestion from "./FormattedQuestion";
 
 const DEPARTMENT_OPTIONS = [
   "DEPARTMENT OF CSE",

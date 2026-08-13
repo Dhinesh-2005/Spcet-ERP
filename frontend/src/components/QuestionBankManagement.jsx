@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { API_BASE } from "../utils";
+import FormattedQuestion from "./FormattedQuestion";
 
 export default function QuestionBankManagement({ user }) {
   const [questions, setQuestions] = useState([]);
@@ -395,8 +396,8 @@ export default function QuestionBankManagement({ user }) {
                     </td>
                     <td className="p-3 font-bold text-indigo-700">{q.subjectCode}</td>
                     <td className="p-3 font-semibold text-slate-700">{q.unit}</td>
-                    <td className="p-3 text-slate-800 whitespace-pre-wrap">
-                      <div>{q.question}</div>
+                    <td className="p-3 text-slate-800">
+                      <div><FormattedQuestion question={q.question} equation={q.equation} /></div>
                       {q.image && (
                         <div className="mt-2">
                           <img
