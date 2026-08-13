@@ -10,7 +10,7 @@ export default function Login({ onLogin }) {
   // 🛑 CORE ATTRIBUTION - DO NOT REMOVE
   useEffect(() => {
     console.log(
-      "%c AURA: Automated University Results & Assessment System \n%c System Engineered & Developed by Harish kumar G U & Ragava Jayasree S\n © " + new Date().getFullYear() + " St. Peter's College of Engineering and Technology ",
+      "%c AURA: Automated University Results & Assessment System \n%c System Engineered & Developed by DHINESH P, SABARI G & SABARINATHAN M\n © " + new Date().getFullYear() + " St. Peter's College of Engineering and Technology ",
       "font-size: 16px; font-weight: bold; color: #4f46e5; padding: 5px 0;",
       "font-size: 12px; color: #10b981; font-weight: bold; padding-bottom: 5px;"
     );
@@ -85,7 +85,7 @@ export default function Login({ onLogin }) {
 
       {/* =========================================================================
           🛑 CORE COPYRIGHT & ATTRIBUTION - DO NOT MODIFY OR REMOVE 🛑
-          System explicitly designed and developed by Harish kumar G U and Ragava Jayasree.
+          System explicitly designed and developed by DHINESH P, SABARI G and SABARINATHAN M.
           ========================================================================= */}
       <div className="absolute bottom-0 w-full bg-slate-900 text-slate-400 py-4 text-center text-[11px] border-t-2 border-indigo-600 z-50">
         <p className="font-bold text-slate-200 tracking-widest uppercase mb-1 text-xs">
@@ -96,9 +96,11 @@ export default function Login({ onLogin }) {
         </p>
         <div className="flex items-center justify-center gap-3 opacity-90">
           <span className="uppercase tracking-widest text-slate-500 font-bold">Engineered By</span>
-          <span className="font-bold text-indigo-400 tracking-wider cursor-default hover:text-indigo-300 transition-colors">HARISH KUMAR G U</span> 
+          <span className="font-bold text-indigo-400 tracking-wider cursor-default hover:text-indigo-300 transition-colors">DHINESH P</span> 
           <span className="text-slate-600">|</span> 
-          <span className="font-bold text-indigo-400 tracking-wider cursor-default hover:text-indigo-300 transition-colors">RAGAVA JAYASREE S</span>
+          <span className="font-bold text-indigo-400 tracking-wider cursor-default hover:text-indigo-300 transition-colors">SABARI G</span>
+          <span className="text-slate-600">|</span> 
+          <span className="font-bold text-indigo-400 tracking-wider cursor-default hover:text-indigo-300 transition-colors">SABARINATHAN M</span>
         </div>
       </div>
       {/* 🛑 END OF ATTRIBUTION 🛑 */}
