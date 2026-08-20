@@ -69,7 +69,7 @@ export default function QuestionBankManagement({ user }) {
 
   const handleUpload = async (e) => {
     e.preventDefault();
-    if (!uploadFile) return alert("Please select an Excel file.");
+    if (!uploadFile) return alert("Please select an Excel or Word file.");
     if (!uploadSubjectCode) return alert("Please enter Subject Code.");
 
     setUploading(true);
@@ -192,7 +192,7 @@ export default function QuestionBankManagement({ user }) {
             📚 Question Bank Management
           </h1>
           <p className="text-sm text-slate-500 mt-1">
-            Upload Excel question banks, organize questions by Subject/Unit/CO, and manage paper repositories.
+            Upload Excel / Word question banks, organize questions by Subject/Unit/CO, and manage paper repositories.
           </p>
         </div>
         <button
@@ -206,7 +206,7 @@ export default function QuestionBankManagement({ user }) {
       {/* UPLOAD SECTION */}
       <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
         <h2 className="text-lg font-bold text-slate-800 mb-3 flex items-center gap-2">
-          📤 Upload Question Bank Excel (.xlsx, .xls)
+          📤 Upload Question Bank (.xlsx, .docx)
         </h2>
         <form onSubmit={handleUpload} className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
           <div>
@@ -236,12 +236,12 @@ export default function QuestionBankManagement({ user }) {
           </div>
           <div>
             <label className="block text-xs font-bold text-slate-600 uppercase mb-1">
-              Excel File *
+              Excel / Word File *
             </label>
             <input
               type="file"
               required
-              accept=".xlsx, .xls"
+              accept=".xlsx, .xls, .docx"
               onChange={(e) => setUploadFile(e.target.files[0])}
               className="w-full text-xs text-slate-500 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
             />

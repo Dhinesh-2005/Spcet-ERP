@@ -4,7 +4,7 @@ import base64
 from datetime import datetime
 from io import BytesIO
 from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Query
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Query, Response
 from bson import ObjectId
 from app.database import db, clean_doc, clean_docs
 from app.models.schemas import QuestionBankModel, GenerateQuestionPaperRequest
@@ -381,6 +381,18 @@ def process_question_equation(question_text: str):
 
     protected_text = re.sub(r"\bCO[0-9]+\b", _preserve_co, raw)
 
+    # 1b. Handle Excel question containing $...$ math delimiters
+    if "$" in protected_text:
+        for ph, orig in co_placeholders.items():
+            protected_text = protected_text.replace(ph, orig)
+        eq_matches = re.findall(r"\$([^\$]+)\$", protected_text)
+        return {
+            "question": protected_text,
+            "equation": " ".join(eq_matches),
+            "hasEquation": len(eq_matches) > 0,
+            "latex": protected_text
+        }
+
     # 2. Check for mathematical / chemical equation patterns
     equation_symbols = [
         r"=", r"√", r"∫", r"Σ", r"π", r"α", r"β", r"θ", r"λ", r"\^",
@@ -504,44 +516,9 @@ async def upload_question_bank(
     regulation: Optional[str] = Form(None),
     semester: Optional[str] = Form(None),
 ):
-    import openpyxl
-
     content = await file.read()
-    try:
-        workbook = openpyxl.load_workbook(filename=BytesIO(content), data_only=True)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid Excel file: {str(e)}")
-
-    sheet = workbook.active
-    rows = list(sheet.iter_rows(values_only=True))
-    if not rows:
-        raise HTTPException(status_code=400, detail="Excel file is empty")
-
-    header_idx = -1
-    for idx, row in enumerate(rows[:20]):
-        if not row:
-            continue
-        row_str = " ".join([_clean_str(c).lower() for c in row if c])
-        if "question" in row_str or "co" in row_str or "part" in row_str:
-            header_idx = idx
-            break
-
-    if header_idx == -1:
-        header_idx = 0
-
-    header = [ _clean_str(c) for c in (rows[header_idx] or []) ]
-    q_idx = _find_col_idx(header, ["question", "qtext", "questions"])
-    co_idx = _find_col_idx(header, ["co", "courseoutcome", "c/o", "co/po"])
-    k_idx = _find_col_idx(header, ["klevel", "k-level", "btl", "bloom"])
-    marks_idx = _find_col_idx(header, ["mark", "marks", "weightage"])
-    part_idx = _find_col_idx(header, ["part", "section"])
-    unit_idx = _find_col_idx(header, ["unit", "unitno"])
-    img_idx = _find_col_idx(header, ["image", "img", "diagram", "figure", "picture"])
-
-    if q_idx == -1:
-        raise HTTPException(status_code=400, detail="Missing mandatory 'Question' column in Excel file")
-
-    image_map = _extract_all_excel_images(content, sheet)
+    filename = file.filename or ""
+    is_docx = filename.lower().endswith(".docx")
 
     total_rows = 0
     imported = 0
@@ -556,73 +533,175 @@ async def upload_question_bank(
 
     new_docs = []
 
-    for row_num in range(header_idx + 1, len(rows)):
-        row = rows[row_num]
-        if not row:
-            continue
-
-        total_rows += 1
-
-        question_text = _clean_str(row[q_idx]) if q_idx < len(row) else ""
-        if not question_text:
-            skipped += 1
-            continue
-
-        raw_co = _clean_str(row[co_idx]) if co_idx != -1 and co_idx < len(row) else "CO1"
-        co_val = _normalize_co(raw_co)
-
-        k_level = _clean_str(row[k_idx]) if k_idx != -1 and k_idx < len(row) else "K1"
-        if not k_level:
-            k_level = "K1"
-
-        raw_marks = row[marks_idx] if marks_idx != -1 and marks_idx < len(row) else None
+    if is_docx:
+        from app.utils.docx_parser import parse_docx_question_bank_rows
         try:
-            marks_val = float(raw_marks) if raw_marks is not None and str(raw_marks).strip() != "" else 2.0
-        except (ValueError, TypeError):
-            marks_val = 2.0
+            raw_rows = parse_docx_question_bank_rows(content)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid Word (.docx) file: {str(e)}")
 
-        raw_part = _clean_str(row[part_idx]) if part_idx != -1 and part_idx < len(row) else ""
-        part_val = _normalize_part(raw_part, marks_val)
+        for row in raw_rows:
+            total_rows += 1
+            question_text = _clean_str(row.get("question"))
+            if not question_text:
+                skipped += 1
+                continue
 
-        raw_unit = _clean_str(row[unit_idx]) if unit_idx != -1 and unit_idx < len(row) else ""
-        unit_val = _normalize_unit(raw_unit, co_val)
+            raw_co = _clean_str(row.get("co")) or "CO1"
+            co_val = _normalize_co(raw_co)
 
-        img_data = image_map.get((row_num, img_idx)) if img_idx != -1 else None
-        if not img_data:
-            img_data = image_map.get(row_num)
-        if not img_data and img_idx != -1 and img_idx < len(row):
-            cell_img_val = _clean_str(row[img_idx])
-            if cell_img_val.startswith("data:image") or cell_img_val.startswith("http"):
-                img_data = {"base64": cell_img_val}
+            k_level = _clean_str(row.get("kLevel")) or "K1"
 
-        norm_q = re.sub(r"\s+", "", question_text.lower())
-        if norm_q in existing_map:
-            duplicates += 1
-            continue
+            raw_marks = row.get("marks")
+            try:
+                marks_val = float(raw_marks) if raw_marks is not None and str(raw_marks).strip() != "" else 2.0
+            except (ValueError, TypeError):
+                marks_val = 2.0
 
-        existing_map.add(norm_q)
+            raw_part = _clean_str(row.get("part"))
+            part_val = _normalize_part(raw_part, marks_val)
 
-        processed_eq = process_question_equation(question_text)
-        doc = {
-            "subjectCode": subjectCode,
-            "subjectName": subjectName,
-            "regulation": regulation,
-            "semester": semester,
-            "unit": unit_val,
-            "question": processed_eq["question"],
-            "equation": processed_eq["equation"],
-            "hasEquation": processed_eq["hasEquation"],
-            "latex": processed_eq["latex"],
-            "part": part_val,
-            "marks": marks_val,
-            "co": co_val,
-            "kLevel": k_level,
-            "image": img_data,
-            "createdAt": now_iso,
-            "updatedAt": now_iso,
-        }
-        new_docs.append(doc)
-        imported += 1
+            raw_unit = _clean_str(row.get("unit"))
+            unit_val = _normalize_unit(raw_unit, co_val)
+
+            img_data = row.get("image")
+
+            norm_q = re.sub(r"\s+", "", question_text.lower())
+            if norm_q in existing_map:
+                duplicates += 1
+                continue
+
+            existing_map.add(norm_q)
+
+            processed_eq = process_question_equation(question_text)
+            doc = {
+                "subjectCode": subjectCode,
+                "subjectName": subjectName,
+                "regulation": regulation,
+                "semester": semester,
+                "unit": unit_val,
+                "question": processed_eq["question"],
+                "equation": processed_eq["equation"],
+                "hasEquation": processed_eq["hasEquation"],
+                "latex": processed_eq["latex"],
+                "part": part_val,
+                "marks": marks_val,
+                "co": co_val,
+                "kLevel": k_level,
+                "image": img_data,
+                "createdAt": now_iso,
+                "updatedAt": now_iso,
+            }
+            new_docs.append(doc)
+            imported += 1
+    else:
+        import openpyxl
+
+        try:
+            workbook = openpyxl.load_workbook(filename=BytesIO(content), data_only=True)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid Excel file: {str(e)}")
+
+        sheet = workbook.active
+        rows = list(sheet.iter_rows(values_only=True))
+        if not rows:
+            raise HTTPException(status_code=400, detail="Excel file is empty")
+
+        header_idx = -1
+        for idx, row in enumerate(rows[:20]):
+            if not row:
+                continue
+            row_str = " ".join([_clean_str(c).lower() for c in row if c])
+            if "question" in row_str or "co" in row_str or "part" in row_str:
+                header_idx = idx
+                break
+
+        if header_idx == -1:
+            header_idx = 0
+
+        header = [ _clean_str(c) for c in (rows[header_idx] or []) ]
+        q_idx = _find_col_idx(header, ["question", "qtext", "questions"])
+        co_idx = _find_col_idx(header, ["co", "courseoutcome", "c/o", "co/po"])
+        k_idx = _find_col_idx(header, ["klevel", "k-level", "btl", "bloom"])
+        marks_idx = _find_col_idx(header, ["mark", "marks", "weightage"])
+        part_idx = _find_col_idx(header, ["part", "section"])
+        unit_idx = _find_col_idx(header, ["unit", "unitno"])
+        img_idx = _find_col_idx(header, ["image", "img", "diagram", "figure", "picture"])
+
+        if q_idx == -1:
+            raise HTTPException(status_code=400, detail="Missing mandatory 'Question' column in Excel file")
+
+        image_map = _extract_all_excel_images(content, sheet)
+
+        for row_num in range(header_idx + 1, len(rows)):
+            row = rows[row_num]
+            if not row:
+                continue
+
+            total_rows += 1
+
+            question_text = _clean_str(row[q_idx]) if q_idx < len(row) else ""
+            if not question_text:
+                skipped += 1
+                continue
+
+            raw_co = _clean_str(row[co_idx]) if co_idx != -1 and co_idx < len(row) else "CO1"
+            co_val = _normalize_co(raw_co)
+
+            k_level = _clean_str(row[k_idx]) if k_idx != -1 and k_idx < len(row) else "K1"
+            if not k_level:
+                k_level = "K1"
+
+            raw_marks = row[marks_idx] if marks_idx != -1 and marks_idx < len(row) else None
+            try:
+                marks_val = float(raw_marks) if raw_marks is not None and str(raw_marks).strip() != "" else 2.0
+            except (ValueError, TypeError):
+                marks_val = 2.0
+
+            raw_part = _clean_str(row[part_idx]) if part_idx != -1 and part_idx < len(row) else ""
+            part_val = _normalize_part(raw_part, marks_val)
+
+            raw_unit = _clean_str(row[unit_idx]) if unit_idx != -1 and unit_idx < len(row) else ""
+            unit_val = _normalize_unit(raw_unit, co_val)
+
+            img_data = image_map.get((row_num, img_idx)) if img_idx != -1 else None
+            if not img_data:
+                img_data = image_map.get(row_num)
+            if not img_data and img_idx != -1 and img_idx < len(row):
+                cell_img_val = _clean_str(row[img_idx])
+                if cell_img_val.startswith("data:image") or cell_img_val.startswith("http"):
+                    img_data = {"base64": cell_img_val}
+
+            norm_q = re.sub(r"\s+", "", question_text.lower())
+            if norm_q in existing_map:
+                duplicates += 1
+                continue
+
+            existing_map.add(norm_q)
+
+            # For Word (.docx) uploads, attach native OpenXML elements and rel_map for native export
+            doc = {
+                "subjectCode": subjectCode,
+                "subjectName": subjectName,
+                "regulation": regulation,
+                "semester": semester,
+                "unit": unit_val,
+                "question": question_text,
+                "cell_xml": row.get("cell_xml") or [],
+                "rel_map": row.get("rel_map") or {},
+                "equation": "",
+                "hasEquation": False,
+                "latex": "",
+                "part": part_val,
+                "marks": marks_val,
+                "co": co_val,
+                "kLevel": k_level,
+                "image": img_data,
+                "createdAt": now_iso,
+                "updatedAt": now_iso,
+            }
+            new_docs.append(doc)
+            imported += 1
 
     if new_docs:
         await db.QuestionBank.insert_many(new_docs)
@@ -643,44 +722,9 @@ async def parse_and_generate_paper(
     file: UploadFile = File(...),
     unit: str = Form("Unit 1"),
 ):
-    import openpyxl
-
     content = await file.read()
-    try:
-        workbook = openpyxl.load_workbook(filename=BytesIO(content), data_only=True)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid Excel file: {str(e)}")
-
-    sheet = workbook.active
-    rows = list(sheet.iter_rows(values_only=True))
-    if not rows:
-        raise HTTPException(status_code=400, detail="Excel file is empty")
-
-    header_idx = -1
-    for idx, row in enumerate(rows[:20]):
-        if not row:
-            continue
-        row_str = " ".join([_clean_str(c).lower() for c in row if c])
-        if "question" in row_str or "co" in row_str or "part" in row_str:
-            header_idx = idx
-            break
-
-    if header_idx == -1:
-        header_idx = 0
-
-    header = [ _clean_str(c) for c in (rows[header_idx] or []) ]
-    q_idx = _find_col_idx(header, ["question", "qtext", "questions"])
-    co_idx = _find_col_idx(header, ["co", "courseoutcome", "c/o", "co/po"])
-    k_idx = _find_col_idx(header, ["klevel", "k-level", "btl", "bloom"])
-    marks_idx = _find_col_idx(header, ["mark", "marks", "weightage"])
-    part_idx = _find_col_idx(header, ["part", "section"])
-    unit_idx = _find_col_idx(header, ["unit", "unitno"])
-    img_idx = _find_col_idx(header, ["image", "img", "diagram", "figure", "picture"])
-
-    if q_idx == -1:
-        raise HTTPException(status_code=400, detail="Missing mandatory 'Question' column in Excel file")
-
-    image_map = _extract_all_excel_images(content, sheet)
+    filename = file.filename or ""
+    is_docx = filename.lower().endswith(".docx")
 
     unit_num_match = re.search(r"\d+", unit)
     target_unit_num = unit_num_match.group(0) if unit_num_match else None
@@ -688,70 +732,170 @@ async def parse_and_generate_paper(
     all_questions = []
     seen_q = set()
 
-    for row_num in range(header_idx + 1, len(rows)):
-        row = rows[row_num]
-        if not row:
-            continue
-
-        question_text = _clean_str(row[q_idx]) if q_idx < len(row) else ""
-        if not question_text:
-            continue
-
-        norm_q = re.sub(r"\s+", "", question_text.lower())
-        if norm_q in seen_q:
-            continue
-        seen_q.add(norm_q)
-
-        raw_co = _clean_str(row[co_idx]) if co_idx != -1 and co_idx < len(row) else ""
-        if raw_co:
-            co_val = _normalize_co(raw_co)
-        else:
-            co_val = f"CO{target_unit_num}" if target_unit_num else "CO1"
-
-        k_level = _clean_str(row[k_idx]) if k_idx != -1 and k_idx < len(row) else "K1"
-        if not k_level:
-            k_level = "K1"
-
-        raw_marks = row[marks_idx] if marks_idx != -1 and marks_idx < len(row) else None
+    if is_docx:
+        from app.utils.docx_parser import parse_docx_question_bank_rows
         try:
-            marks_val = float(raw_marks) if raw_marks is not None and str(raw_marks).strip() != "" else 2.0
-        except (ValueError, TypeError):
-            marks_val = 2.0
+            raw_rows = parse_docx_question_bank_rows(content)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid Word (.docx) file: {str(e)}")
 
-        raw_part = _clean_str(row[part_idx]) if part_idx != -1 and part_idx < len(row) else ""
-        part_val = _normalize_part(raw_part, marks_val)
-
-        raw_unit = _clean_str(row[unit_idx]) if unit_idx != -1 and unit_idx < len(row) else ""
-        unit_val = _normalize_unit(raw_unit, co_val)
-
-        img_data = image_map.get((row_num, img_idx)) if img_idx != -1 else None
-        if not img_data:
-            img_data = image_map.get(row_num)
-        if not img_data and img_idx != -1 and img_idx < len(row):
-            cell_img_val = _clean_str(row[img_idx])
-            if cell_img_val.startswith("data:image") or cell_img_val.startswith("http"):
-                img_data = {"base64": cell_img_val}
-
-        # Filter by unit if specified
-        if target_unit_num:
-            u_match = re.search(r"\d+", unit_val)
-            if u_match and u_match.group(0) != target_unit_num:
+        for row in raw_rows:
+            question_text = _clean_str(row.get("question"))
+            if not question_text:
                 continue
 
-        processed_eq = process_question_equation(question_text)
-        doc = {
-            "unit": unit_val,
-            "question": processed_eq["question"],
-            "equation": processed_eq["equation"],
-            "hasEquation": processed_eq["hasEquation"],
-            "latex": processed_eq["latex"],
-            "part": part_val,
-            "marks": marks_val,
-            "co": co_val,
-            "kLevel": k_level,
-            "image": img_data,
-        }
-        all_questions.append(doc)
+            norm_q = re.sub(r"\s+", "", question_text.lower())
+            if norm_q in seen_q:
+                continue
+            seen_q.add(norm_q)
+
+            raw_co = _clean_str(row.get("co"))
+            if raw_co:
+                co_val = _normalize_co(raw_co)
+            else:
+                co_val = f"CO{target_unit_num}" if target_unit_num else "CO1"
+
+            k_level = _clean_str(row.get("kLevel")) or "K1"
+
+            raw_marks = row.get("marks")
+            try:
+                marks_val = float(raw_marks) if raw_marks is not None and str(raw_marks).strip() != "" else 2.0
+            except (ValueError, TypeError):
+                marks_val = 2.0
+
+            raw_part = _clean_str(row.get("part"))
+            part_val = _normalize_part(raw_part, marks_val)
+
+            raw_unit = _clean_str(row.get("unit"))
+            unit_val = _normalize_unit(raw_unit, co_val)
+
+            img_data = row.get("image")
+
+            # Filter by unit if specified
+            if target_unit_num:
+                u_match = re.search(r"\d+", unit_val)
+                if u_match and u_match.group(0) != target_unit_num:
+                    continue
+
+            # For Word (.docx) uploads, attach native OpenXML elements and rel_map for native export
+            doc = {
+                "unit": unit_val,
+                "question": question_text,
+                "cell_xml": row.get("cell_xml") or [],
+                "rel_map": row.get("rel_map") or {},
+                "equation": "",
+                "hasEquation": False,
+                "latex": "",
+                "part": part_val,
+                "marks": marks_val,
+                "co": co_val,
+                "kLevel": k_level,
+                "image": img_data,
+            }
+            all_questions.append(doc)
+    else:
+        import openpyxl
+
+        try:
+            workbook = openpyxl.load_workbook(filename=BytesIO(content), data_only=True)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid Excel file: {str(e)}")
+
+        sheet = workbook.active
+        rows = list(sheet.iter_rows(values_only=True))
+        if not rows:
+            raise HTTPException(status_code=400, detail="Excel file is empty")
+
+        header_idx = -1
+        for idx, row in enumerate(rows[:20]):
+            if not row:
+                continue
+            row_str = " ".join([_clean_str(c).lower() for c in row if c])
+            if "question" in row_str or "co" in row_str or "part" in row_str:
+                header_idx = idx
+                break
+
+        if header_idx == -1:
+            header_idx = 0
+
+        header = [ _clean_str(c) for c in (rows[header_idx] or []) ]
+        q_idx = _find_col_idx(header, ["question", "qtext", "questions"])
+        co_idx = _find_col_idx(header, ["co", "courseoutcome", "c/o", "co/po"])
+        k_idx = _find_col_idx(header, ["klevel", "k-level", "btl", "bloom"])
+        marks_idx = _find_col_idx(header, ["mark", "marks", "weightage"])
+        part_idx = _find_col_idx(header, ["part", "section"])
+        unit_idx = _find_col_idx(header, ["unit", "unitno"])
+        img_idx = _find_col_idx(header, ["image", "img", "diagram", "figure", "picture"])
+
+        if q_idx == -1:
+            raise HTTPException(status_code=400, detail="Missing mandatory 'Question' column in Excel file")
+
+        image_map = _extract_all_excel_images(content, sheet)
+
+        for row_num in range(header_idx + 1, len(rows)):
+            row = rows[row_num]
+            if not row:
+                continue
+
+            question_text = _clean_str(row[q_idx]) if q_idx < len(row) else ""
+            if not question_text:
+                continue
+
+            norm_q = re.sub(r"\s+", "", question_text.lower())
+            if norm_q in seen_q:
+                continue
+            seen_q.add(norm_q)
+
+            raw_co = _clean_str(row[co_idx]) if co_idx != -1 and co_idx < len(row) else ""
+            if raw_co:
+                co_val = _normalize_co(raw_co)
+            else:
+                co_val = f"CO{target_unit_num}" if target_unit_num else "CO1"
+
+            k_level = _clean_str(row[k_idx]) if k_idx != -1 and k_idx < len(row) else "K1"
+            if not k_level:
+                k_level = "K1"
+
+            raw_marks = row[marks_idx] if marks_idx != -1 and marks_idx < len(row) else None
+            try:
+                marks_val = float(raw_marks) if raw_marks is not None and str(raw_marks).strip() != "" else 2.0
+            except (ValueError, TypeError):
+                marks_val = 2.0
+
+            raw_part = _clean_str(row[part_idx]) if part_idx != -1 and part_idx < len(row) else ""
+            part_val = _normalize_part(raw_part, marks_val)
+
+            raw_unit = _clean_str(row[unit_idx]) if unit_idx != -1 and unit_idx < len(row) else ""
+            unit_val = _normalize_unit(raw_unit, co_val)
+
+            img_data = image_map.get((row_num, img_idx)) if img_idx != -1 else None
+            if not img_data:
+                img_data = image_map.get(row_num)
+            if not img_data and img_idx != -1 and img_idx < len(row):
+                cell_img_val = _clean_str(row[img_idx])
+                if cell_img_val.startswith("data:image") or cell_img_val.startswith("http"):
+                    img_data = {"base64": cell_img_val}
+
+            # Filter by unit if specified
+            if target_unit_num:
+                u_match = re.search(r"\d+", unit_val)
+                if u_match and u_match.group(0) != target_unit_num:
+                    continue
+
+            processed_eq = process_question_equation(question_text)
+            doc = {
+                "unit": unit_val,
+                "question": processed_eq["question"],
+                "equation": processed_eq["equation"],
+                "hasEquation": processed_eq["hasEquation"],
+                "latex": processed_eq["latex"],
+                "part": part_val,
+                "marks": marks_val,
+                "co": co_val,
+                "kLevel": k_level,
+                "image": img_data,
+            }
+            all_questions.append(doc)
 
     part_a = [q for q in all_questions if q["part"] == "A" or q["marks"] <= 2]
     part_b_all = [q for q in all_questions if q["part"] == "B" or q["marks"] > 2]

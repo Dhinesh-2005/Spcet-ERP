@@ -272,15 +272,6 @@ class MathUprightRun extends BuilderElement {
       name: "m:r",
       children: [
         new BuilderElement({
-          name: "m:rPr",
-          children: [
-            new BuilderElement({
-              name: "m:sty",
-              attributes: { val: { key: "m:val", value: "p" } }
-            })
-          ]
-        }),
-        new BuilderElement({
           name: "m:t",
           children: [text]
         })
@@ -302,12 +293,13 @@ class MathAccent extends XmlComponent {
 class MathIntegralCustom extends XmlComponent {
   constructor(options) {
     super("m:nary");
+    const isSum = options.accent === "∑" || options.accent === "∏";
     this.root.push(
       createMathNAryProperties({
         accent: options.accent || "∫",
         hasSuperScript: !!options.superScript,
         hasSubScript: !!options.subScript,
-        limitLocationVal: "subSup"
+        limitLocationVal: isSum ? "undOvr" : "subSup"
       })
     );
     if (!!options.subScript) {
@@ -396,7 +388,11 @@ const LATEX_SYMBOLS = {
   "\\rightarrow": "→", "\\leftarrow": "←", "\\rightleftharpoons": "⇌",
   "\\longrightarrow": "⟶", "\\longleftarrow": "⟵", "\\longleftrightarrow": "⟷",
   "\\leftrightarrow": "↔", "\\Rightarrow": "⇒", "\\Leftarrow": "⇐",
-  "\\,": " ", "\\;": " ", "\\quad": " ", "\\qquad": " ",
+  "\\div": "÷", "\\mp": "∓", "\\cap": "∩", "\\cup": "∪", "\\in": "∈",
+  "\\notin": "∉", "\\subset": "⊂", "\\subseteq": "⊆", "\\forall": "∀",
+  "\\exists": "∃", "\\nabla": "∇", "\\angle": "∠", "\\circ": "°",
+  "\\equiv": "≡", "\\sim": "∼", "\\propto": "∝", "\\perp": "⊥", "\\parallel": "∥",
+  "\\,": " ", "\\;": " ", "\\quad": " ", "\\qquad": " ", "\\ ": " ",
   "\\left": "", "\\right": ""
 };
 
@@ -631,9 +627,20 @@ function parseLaTeXToMathNodes(latex) {
         }
       }
 
-      // Parse the rest of the string as the integrand / body of the operator
-      const bodyLatex = latex.substring(pos);
-      const bodyNodes = parseLaTeXToMathNodes(bodyLatex);
+      let bodyNodes = [];
+      let endPos = pos;
+      while (endPos < latex.length && latex[endPos] === " ") endPos++;
+
+      if (endPos < latex.length) {
+        if (latex[endPos] === "{") {
+          const termGrp = readBracedGroup(latex, endPos);
+          bodyNodes = parseLaTeXToMathNodes(termGrp.content);
+          endPos = termGrp.nextPos;
+        } else {
+          bodyNodes = parseLaTeXToMathNodes(latex.substring(endPos));
+          endPos = latex.length;
+        }
+      }
 
       nodes.push(new MathIntegralCustom({
         accent: matchedOp.accent,
@@ -642,8 +649,7 @@ function parseLaTeXToMathNodes(latex) {
         children: bodyNodes
       }));
 
-      // Entire remaining string was consumed as body of integral
-      i = latex.length;
+      i = endPos;
       continue;
     }
 
@@ -765,16 +771,25 @@ function parseLaTeXToMathNodes(latex) {
 
 function parsePlainTextRuns(text, baseBold = false) {
   if (!text) return [];
+
+  // Protect course outcome & bloom level metadata tokens (CO1-CO6, K1-K6)
+  // so they are NEVER treated as chemical elements (Cobalt/Potassium) or subscript equations
+  const metadataPlaceholders = {};
+  let protectedText = String(text).replace(/\b(?:CO[1-6]|K[1-6])\b/gi, (m) => {
+    const ph = `__META_TOKEN_${Object.keys(metadataPlaceholders).length}__`;
+    metadataPlaceholders[ph] = m;
+    return ph;
+  });
+
   const chemElements = "(?:H|He|Li|Be|B|C|N|O|F|Ne|Na|Mg|Al|Si|P|S|Cl|Ar|K|Ca|Sc|Ti|V|Cr|Mn|Fe|Co|Ni|Cu|Zn|Ga|Ge|As|Se|Br|Kr|Rb|Sr|Y|Zr|Nb|Mo|Tc|Ru|Rh|Pd|Ag|Cd|In|Sn|Sb|Te|I|Xe|Cs|Ba|La|Ce|Pr|Nd|Pm|Sm|Eu|Gd|Tb|Dy|Ho|Er|Tm|Yb|Lu|Hf|Ta|W|Re|Os|Ir|Pt|Au|Hg|Tl|Pb|Bi|Po|At|Rn|Fr|Ra|Ac|Th|Pa|U)";
 
-  // Format chemical formulas in plain text like H_2O, CO_2, H_2SO_4, Fe_2O_3, NH_3, CH_4
-  let formattedText = text;
+  // Format chemical formulas in plain text like H_2O, H_2SO_4, Fe_2O_3, NH_3, CH_4
+  let formattedText = protectedText;
   formattedText = formattedText.replace(new RegExp(`(${chemElements})_(\\d+)`, "g"), (m, el, n) => {
     const subMap = { '0':'₀','1':'₁','2':'₂','3':'₃','4':'₄','5':'₅','6':'₆','7':'₇','8':'₈','9':'₉' };
     return el + String(n).split('').map(c => subMap[c] || c).join('');
   });
   // Reaction arrows and conditions in plain text
-  // \xrightarrow{condition} → "→" with condition as superscript placeholder (best plain-text approximation)
   formattedText = formattedText.replace(/\\xrightarrow\{([^}]*)\}/g, (m, cond) => {
     const condClean = cond
       .replace(/\\Delta/g, 'Δ').replace(/\\nu/g, 'ν').replace(/\\,/g, ' ')
@@ -786,7 +801,6 @@ function parsePlainTextRuns(text, baseBold = false) {
   formattedText = formattedText.replace(/\\rightarrow|\\to(?=[^a-z]|$)/g, "→");
   formattedText = formattedText.replace(/\\leftarrow/g, "←");
   formattedText = formattedText.replace(/\\rightleftharpoons/g, "⇌");
-  // Clean up remaining common LaTeX commands in plain chemical text
   formattedText = formattedText.replace(/\\Delta/g, 'Δ');
   formattedText = formattedText.replace(/\\nu/g, 'ν');
   formattedText = formattedText.replace(/\\[,;]/g, ' ');
@@ -828,12 +842,20 @@ function parsePlainTextRuns(text, baseBold = false) {
     runs.push({ text: formattedText.substring(lastIndex) });
   }
 
-  return runs.map(r => new TextRun({
-    text: r.text,
-    bold: baseBold,
-    subScript: r.subScript || false,
-    superScript: r.superScript || false
-  }));
+  return runs.map(r => {
+    let t = r.text;
+    for (const [ph, orig] of Object.entries(metadataPlaceholders)) {
+      t = t.replace(ph, orig);
+    }
+    return new TextRun({
+      text: t,
+      bold: baseBold,
+      font: "Times New Roman",
+      size: 21,
+      subScript: r.subScript || false,
+      superScript: r.superScript || false
+    });
+  });
 }
 
 export const parseQuestionTextRuns = (rawText, baseBold = false) => {
@@ -844,32 +866,54 @@ export const parseQuestionTextRuns = (rawText, baseBold = false) => {
     return [new TextRun({ text, bold: baseBold })];
   }
 
-  let parts = [];
   if (text.includes('$')) {
-    parts = text.split('$');
-  } else {
-    const hasLatexCmd = /\\(?:frac|sqrt|vec|lim|int|oint|iint|iiint|idotsint|sum|prod|alpha|beta|theta|pi|partial|times|cdot|to|cosh|sinh|tanh|coth|sech|csch|sin|cos|tan|cot|sec|csc|log|lg|ln|exp|max|min|sup|inf|begin|pmatrix|bmatrix|vmatrix|xrightarrow|longrightarrow|longleftarrow|longleftrightarrow)\b/i.test(text);
-    if (hasLatexCmd) {
-      parts = ["", text, ""];
-    } else {
-      parts = [text];
+    const parts = text.split('$');
+    const result = [];
+    for (let idx = 0; idx < parts.length; idx++) {
+      const part = parts[idx];
+      if (idx % 2 === 0) {
+        if (part) result.push(...parsePlainTextRuns(part, baseBold));
+      } else {
+        if (part && part.trim()) {
+          const mathNodes = parseLaTeXToMathNodes(part.trim());
+          if (mathNodes.length > 0) result.push(new DocxMath({ children: mathNodes }));
+        }
+      }
     }
+    return result.length > 0 ? result : [new TextRun({ text: "", bold: baseBold })];
   }
 
-  if (parts.length === 1) {
-    return parsePlainTextRuns(parts[0], baseBold);
+  const mathRegex = /(\\begin\{(?:matrix|bmatrix|pmatrix|vmatrix|cases)\}[\s\S]*?\\end\{(?:matrix|bmatrix|pmatrix|vmatrix|cases)\}|\\frac\{[^{}]*\}\{[^{}]*\}|\\sqrt(?:\[[^{}]*\])?\{[^{}]*\}|\\(?:int|iint|iiint|oint|idotsint|sum|prod|lim|max|min|sup|inf)(?:_\{[^{}]*\}|_[a-zA-Z0-9=+\-]+)?(?:\^\{[^{}]*\}|\^[a-zA-Z0-9=+\-]+)?|\\vec\{[^{}]*\}|\\(?:alpha|beta|gamma|delta|theta|lambda|mu|pi|sigma|phi|psi|omega|Delta|Theta|Lambda|Pi|Sigma|Omega|partial|nabla|infty|times|cdot)\b)/g;
+
+  const segments = [];
+  let lastIdx = 0;
+  let m;
+
+  while ((m = mathRegex.exec(text)) !== null) {
+    if (m.index > lastIdx) {
+      segments.push({ isMath: false, content: text.substring(lastIdx, m.index) });
+    }
+    segments.push({ isMath: true, content: m[0] });
+    lastIdx = mathRegex.lastIndex;
+  }
+
+  if (lastIdx < text.length) {
+    segments.push({ isMath: false, content: text.substring(lastIdx) });
+  }
+
+  if (segments.length === 0) {
+    return parsePlainTextRuns(text, baseBold);
   }
 
   const result = [];
-  for (let idx = 0; idx < parts.length; idx++) {
-    const part = parts[idx];
-    if (idx % 2 === 0) {
-      if (part) {
-        result.push(...parsePlainTextRuns(part, baseBold));
+  for (const seg of segments) {
+    if (!seg.isMath) {
+      if (seg.content) {
+        result.push(...parsePlainTextRuns(seg.content, baseBold));
       }
     } else {
-      if (part && part.trim()) {
-        const mathNodes = parseLaTeXToMathNodes(part.trim());
+      if (seg.content && seg.content.trim()) {
+        const mathNodes = parseLaTeXToMathNodes(seg.content.trim());
         if (mathNodes.length > 0) {
           result.push(new DocxMath({ children: mathNodes }));
         }
@@ -939,7 +983,7 @@ export const exportUnitTestPaperDocx = async (config) => {
 
     const noBorders = { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE }, insideHorizontal: { style: BorderStyle.NONE }, insideVertical: { style: BorderStyle.NONE } };
     const createCell = (text, width = 10, bold = false, align = AlignmentType.CENTER) => {
-      const lines = splitQuestionSubdivisions(text);
+      const lines = String(text != null ? text : "").split("\n");
       const paragraphs = lines.map(line => new Paragraph({ children: parseQuestionTextRuns(line, bold), alignment: align, spacing: { before: 100, after: 100 } }));
       return new TableCell({ width: { size: width, type: WidthType.PERCENTAGE }, children: paragraphs });
     };

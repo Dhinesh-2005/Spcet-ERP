@@ -29,10 +29,6 @@ function parseMixedTextAndLatex(textStr) {
   const latexCommandRegex = /\\(?:frac|sqrt|vec|sum|prod|int|oint|iint|iiint|idotsint|lim|infty|cosh|sinh|tanh|coth|sech|csch|exp|sin|cos|tan|cot|sec|csc|log|lg|ln|max|min|sup|inf|left|right|partial|pm|approx|ne|le|ge|leq|geq|pi|alpha|beta|theta|lambda|sigma|cdot|to|rightarrow|leftarrow|rightleftharpoons|xrightarrow|longrightarrow|longleftarrow|longleftrightarrow|begin|pmatrix|bmatrix|vmatrix|cases)\b/i;
 
   if (!latexCommandRegex.test(text)) {
-    // Check for inline math exponents like x^2, a^2+b^2=c^2
-    if (/(?:[a-zA-Z]\^[0-9]+|\=|\√|∫|Σ|π)/.test(text)) {
-      return [{ type: 'math', content: text }];
-    }
     return [{ type: 'text', content: text }];
   }
 

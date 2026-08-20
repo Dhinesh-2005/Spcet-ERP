@@ -382,6 +382,8 @@ export default function FacultyDashboard({ user, onLogout }) {
         newPartA = unitPartA2024.map((item, i) => ({
           ...item,
           question: data.partA[i]?.question || item.question,
+          cell_xml: data.partA[i]?.cell_xml || [],
+          rel_map:  data.partA[i]?.rel_map  || {},
           equation: data.partA[i]?.equation || "",
           hasEquation: data.partA[i]?.hasEquation || false,
           kLevel:   data.partA[i]?.kLevel   || item.kLevel,
@@ -404,6 +406,8 @@ export default function FacultyDashboard({ user, onLogout }) {
             a: {
               ...item.a,
               question: qA?.question || item.a.question,
+              cell_xml: qA?.cell_xml || [],
+              rel_map:  qA?.rel_map  || {},
               equation: qA?.equation || "",
               hasEquation: qA?.hasEquation || false,
               kLevel: pairKLevel,
@@ -414,6 +418,8 @@ export default function FacultyDashboard({ user, onLogout }) {
             b: {
               ...item.b,
               question: qB?.question || item.b.question,
+              cell_xml: qB?.cell_xml || [],
+              rel_map:  qB?.rel_map  || {},
               equation: qB?.equation || "",
               hasEquation: qB?.hasEquation || false,
               kLevel: pairKLevel,
@@ -435,6 +441,8 @@ export default function FacultyDashboard({ user, onLogout }) {
         newPartA = unitPartA2021.map((item, i) => ({
           ...item,
           question: data.partA[i]?.question || item.question,
+          cell_xml: data.partA[i]?.cell_xml || [],
+          rel_map:  data.partA[i]?.rel_map  || {},
           equation: data.partA[i]?.equation || "",
           hasEquation: data.partA[i]?.hasEquation || false,
           kLevel:   data.partA[i]?.kLevel   || item.kLevel,
@@ -452,8 +460,8 @@ export default function FacultyDashboard({ user, onLogout }) {
           const pairKLevel = qA?.kLevel || qB?.kLevel || item.a.kLevel;
           return {
             ...item,
-            a: { ...item.a, question: qA?.question || item.a.question, equation: qA?.equation || "", hasEquation: qA?.hasEquation || false, kLevel: pairKLevel, co: qA?.co || defaultCo, image: qA?.image !== undefined ? qA.image : item.a.image },
-            b: { ...item.b, question: qB?.question || item.b.question, equation: qB?.equation || "", hasEquation: qB?.hasEquation || false, kLevel: pairKLevel, co: qB?.co || defaultCo, image: qB?.image !== undefined ? qB.image : item.b.image },
+            a: { ...item.a, question: qA?.question || item.a.question, cell_xml: qA?.cell_xml || [], rel_map: qA?.rel_map || {}, equation: qA?.equation || "", hasEquation: qA?.hasEquation || false, kLevel: pairKLevel, co: qA?.co || defaultCo, image: qA?.image !== undefined ? qA.image : item.a.image },
+            b: { ...item.b, question: qB?.question || item.b.question, cell_xml: qB?.cell_xml || [], rel_map: qB?.rel_map || {}, equation: qB?.equation || "", hasEquation: qB?.hasEquation || false, kLevel: pairKLevel, co: qB?.co || defaultCo, image: qB?.image !== undefined ? qB.image : item.b.image },
           };
         });
         setUnitPartB2021(newPartB);
@@ -466,8 +474,8 @@ export default function FacultyDashboard({ user, onLogout }) {
           const pairKLevel = qA?.kLevel || qB?.kLevel || item.a.kLevel;
           return {
             ...item,
-            a: { ...item.a, question: qA?.question || item.a.question, equation: qA?.equation || "", hasEquation: qA?.hasEquation || false, kLevel: pairKLevel, co: qA?.co || defaultCo, image: qA?.image !== undefined ? qA.image : item.a.image },
-            b: { ...item.b, question: qB?.question || item.b.question, equation: qB?.equation || "", hasEquation: qB?.hasEquation || false, kLevel: pairKLevel, co: qB?.co || defaultCo, image: qB?.image !== undefined ? qB.image : item.b.image },
+            a: { ...item.a, question: qA?.question || item.a.question, cell_xml: qA?.cell_xml || [], rel_map: qA?.rel_map || {}, equation: qA?.equation || "", hasEquation: qA?.hasEquation || false, kLevel: pairKLevel, co: qA?.co || defaultCo, image: qA?.image !== undefined ? qA.image : item.a.image },
+            b: { ...item.b, question: qB?.question || item.b.question, cell_xml: qB?.cell_xml || [], rel_map: qB?.rel_map || {}, equation: qB?.equation || "", hasEquation: qB?.hasEquation || false, kLevel: pairKLevel, co: qB?.co || defaultCo, image: qB?.image !== undefined ? qB.image : item.b.image },
           };
         });
         setUnitPartC2021(newPartC);
@@ -502,6 +510,7 @@ export default function FacultyDashboard({ user, onLogout }) {
         coDistribution: { marks: coDist.marks, percentage: coDist.perc }
       };
       await exportUnitTestPaperDocx(config);
+
       try {
         await fetch(`${API_BASE}/api/import/save-question-paper`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ subjectCode: subCode, qpCode: autoQpCode, department: unitHeader.department, examSession: unitHeader.examSession, hasPartC: !is2024, examType: "UNIT_TEST", facultyName: user.name, semester: unitHeader.semesterWord, unit: qbUnit, paperData: JSON.stringify(config) }) });
         if(activeTask) await handleUpdateReqStatus(activeTask.id, "SUBMITTED");
@@ -908,7 +917,7 @@ export default function FacultyDashboard({ user, onLogout }) {
                 <span>📥</span> Upload Question Bank &amp; Auto-Generate Paper
               </h3>
               <p className="text-xs text-gray-500 mt-1">
-                Select the unit and upload an Excel file — the question paper will be filled automatically. Questions are <span className="font-semibold text-teal-700">not stored</span> in the database.
+                Select the unit and upload an Excel (.xlsx) or Word (.docx) file — the question paper will be filled automatically. Questions are <span className="font-semibold text-teal-700">not stored</span> in the database.
               </p>
             </div>
 
@@ -923,7 +932,7 @@ export default function FacultyDashboard({ user, onLogout }) {
               if (!unitHeader.subjectCode?.trim() || !unitHeader.subjectName?.trim()) {
                 return alert("⚠️ Both Subject Code and Subject Name are compulsory! Please fill both fields before uploading.");
               }
-              if (!qbUploadFile) return alert("Please select an Excel file.");
+              if (!qbUploadFile) return alert("Please select an Excel or Word file.");
 
 
 
@@ -944,7 +953,7 @@ export default function FacultyDashboard({ user, onLogout }) {
                   // reset file input
                   e.target.reset();
                 } else {
-                  alert(data.detail || "Failed to generate from Excel.");
+                  alert(data.detail || "Failed to generate from file.");
                 }
               } catch (err) {
                 alert("Error uploading file.");
@@ -966,11 +975,11 @@ export default function FacultyDashboard({ user, onLogout }) {
                 </select>
               </div>
               <div className="flex-1 w-full">
-                <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Excel File (.xlsx) *</label>
+                <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Excel / Word File (.xlsx, .docx) *</label>
                 <input
                   type="file"
                   required
-                  accept=".xlsx, .xls"
+                  accept=".xlsx, .xls, .docx"
                   onChange={e => setQbUploadFile(e.target.files[0])}
                   className="w-full text-sm text-gray-500 file:mr-2 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:font-bold file:bg-teal-50 file:text-teal-700 hover:file:bg-teal-100"
                 />
