@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File
 from fastapi.responses import Response
 from app.database import db, clean_doc, clean_docs
 from typing import Dict, Any
+from app.services.academic_service import academic_service
 
 router = APIRouter()
 
@@ -51,45 +52,42 @@ async def get_student_subjects(reg_no: str):
 
     subjects_map: Dict[str, Dict] = {}
 
-    # 1.5. Find all subject codes that are designated as student-specific (Other Subjects)
-    student_specific_codes = set(await db.student_subjects.distinct("subjectCode"))
+    # Pre-fetch all Master subjects for fast, flexible lookup
+    master_subjects_list = [clean_doc(s) async for s in db.subjects.find({})]
 
-    # 2. Fetch regular subjects for this student's dept & semester
-    if dept and semester:
-        async for sub in db.subjects.find({"department": dept, "semester": int(semester)}):
-            code = str(sub.get("subjectCode", "")).strip().upper()
-            # Do NOT include subjects that are registered as student-specific unless mapped to this student specifically
-            if code and code not in student_specific_codes:
-                subjects_map[code] = {
-                    "subjectCode": code,
-                    "subjectName": sub.get("subjectName", ""),
-                    "department": sub.get("department", dept),
-                    "semester": sub.get("semester", semester),
-                    "credits": sub.get("credits", 0),
-                    "paperType": sub.get("paperType", "THEORY"),
-                    "category": "REGULAR",
-                    "source": "regular"
-                }
-
-    # 3. Fetch student-specific subject mappings (arrear, honours, minor, etc.)
+    # Fetch ONLY subject mappings explicitly uploaded/assigned to this student in db.student_subjects
     async for mapping in db.student_subjects.find({"registerNumber": reg_no}):
         code = str(mapping.get("subjectCode", "")).strip().upper()
         if not code:
             continue
 
-        # Try to enrich with full subject details from db.subjects
-        subject_detail = await db.subjects.find_one({"subjectCode": code})
+        clean_code = str(code).replace(" ", "").upper()
 
-        category = str(mapping.get("category", "OTHER")).strip().upper()
+        # Find best matching Subject Master doc with non-empty subjectName
+        subject_detail = next((s for s in master_subjects_list if s.get("subjectCode") == code and s.get("department") == dept and s.get("subjectName")), None)
+        if not subject_detail:
+            subject_detail = next((s for s in master_subjects_list if s.get("subjectCode") == code and s.get("subjectName")), None)
+        if not subject_detail:
+            subject_detail = next((s for s in master_subjects_list if str(s.get("subjectCode", "")).replace(" ", "").upper() == clean_code and s.get("subjectName")), None)
+        if not subject_detail:
+            subject_detail = await db.subjects.find_one({"subjectCode": code})
+
+        s_name = (subject_detail.get("subjectName") if subject_detail and subject_detail.get("subjectName") else None) or mapping.get("subjectName") or code
+        credits_val = float(subject_detail.get("credits") if subject_detail and subject_detail.get("credits") is not None else (mapping.get("credits") or 0))
+        paper_type = str((subject_detail.get("paperType") if subject_detail else None) or mapping.get("paperType") or "THEORY").strip().upper()
+        regulation = str((subject_detail.get("regulation") if subject_detail else None) or mapping.get("regulation") or "2021").strip()
+
+        category = str(mapping.get("category", "REGULAR")).strip().upper()
         subjects_map[code] = {
             "subjectCode": code,
-            "subjectName": mapping.get("subjectName") or (subject_detail.get("subjectName") if subject_detail else "") or code,
+            "subjectName": s_name,
             "department": mapping.get("department") or (subject_detail.get("department") if subject_detail else dept),
             "semester": mapping.get("subjectSemester") or (subject_detail.get("semester") if subject_detail else semester),
-            "credits": mapping.get("credits") or (subject_detail.get("credits") if subject_detail else 0),
-            "paperType": (subject_detail.get("paperType") if subject_detail else "THEORY"),
+            "credits": credits_val,
+            "paperType": paper_type,
+            "regulation": regulation,
             "category": category,
-            "source": "specific"
+            "source": "assigned"
         }
 
     return {
@@ -100,4 +98,13 @@ async def get_student_subjects(reg_no: str):
         "subjects": list(subjects_map.values()),
         "totalSubjects": len(subjects_map)
     }
+
+
+@router.get("/{reg_no}/academic-history")
+async def get_academic_history(reg_no: str):
+    data = await academic_service.get_student_academic_history(reg_no)
+    if not data:
+        raise HTTPException(status_code=404, detail=f"Academic history for student {reg_no} not found.")
+    return data
+
 

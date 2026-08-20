@@ -1,6 +1,6 @@
 import re
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
-from typing import List, Dict, Any
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Query
+from typing import List, Dict, Any, Optional
 from io import BytesIO
 from bson import ObjectId
 from app.database import db, clean_doc
@@ -83,28 +83,60 @@ async def upload_subjects(subjects: List[SubjectModel]):
         subject.department  = (subject.department or "").strip().upper()
 
         if not subject.subjectCode:
-            skipped.append("row: missing subjectCode"); continue
+            skipped.append("row: missing Subject Code"); continue
         if not subject.department:
-            skipped.append(f"{subject.subjectCode}: missing department"); continue
+            skipped.append(f"{subject.subjectCode}: missing Department"); continue
         if not subject.semester or subject.semester < 1:
-            skipped.append(f"{subject.subjectCode}: invalid semester ({subject.semester})"); continue
+            skipped.append(f"{subject.subjectCode}: invalid Semester ({subject.semester})"); continue
 
-        # Ensure credits is stored as a non-negative integer
-        subject.credits = max(0, int(subject.credits or 0))
+        # 1. Fetch Subject details from Subject Master (db.subjects) using subjectCode
+        master_subject = await db.subjects.find_one({"subjectCode": subject.subjectCode, "department": subject.department})
+        if not master_subject:
+            master_subject = await db.subjects.find_one({"subjectCode": subject.subjectCode})
+        if not master_subject:
+            all_subs = [s async for s in db.subjects.find({})]
+            clean_code = _clean_string(subject.subjectCode)
+            master_subject = next((s for s in all_subs if _clean_string(s.get("subjectCode")) == clean_code), None)
 
-        existing = await db.subjects.find_one({"subjectCode": subject.subjectCode, "department": subject.department})
-        if existing:
-            subject.id = str(existing.get("_id"))
+        if not master_subject:
+            skipped.append(f"{subject.subjectCode}: Not found in Subject Master. Please register it in Academic Management / Subject Master first.")
+            continue
 
-        await db.subjects.update_one(
-            {"subjectCode": subject.subjectCode, "department": subject.department},
-            {"$set": subject.dict(exclude_none=True, exclude={"id"})},
-            upsert=True,
-        )
+        subject_name = master_subject.get("subjectName") or subject.subjectName or subject.subjectCode
+        credits_val  = float(master_subject.get("credits") if master_subject.get("credits") is not None else (subject.credits or 3.0))
+        paper_type   = master_subject.get("paperType", "THEORY")
+        regulation   = master_subject.get("regulation", "2021")
+
         imported += 1
 
+        # 2. Assign regular subjects to all students in that dept & semester in db.student_subjects
+        students_cursor = db.students.find({
+            "department": subject.department,
+            "semester": int(subject.semester)
+        })
+        async for student in students_cursor:
+            reg_no = str(student.get("registerNumber", "")).strip().upper()
+            if reg_no:
+                await db.student_subjects.update_one(
+                    {"registerNumber": reg_no, "subjectCode": subject.subjectCode},
+                    {
+                        "$set": {
+                            "registerNumber": reg_no,
+                            "subjectCode": subject.subjectCode,
+                            "subjectName": subject_name,
+                            "subjectSemester": int(subject.semester),
+                            "credits": credits_val,
+                            "paperType": paper_type,
+                            "regulation": regulation,
+                            "category": "REGULAR",
+                            "department": subject.department
+                        }
+                    },
+                    upsert=True
+                )
+
     return {
-        "message": f"Subjects uploaded: {imported} imported, {len(skipped)} skipped.",
+        "message": f"Subjects uploaded & assigned: {imported} processed, {len(skipped)} skipped.",
         "imported": imported,
         "skipped": len(skipped),
         "skippedDetails": skipped
@@ -135,9 +167,9 @@ async def upload_other_subjects(rows: List[Dict[str, Any]]):
 
         credits_raw = row.get("credits") or row.get("Credits") or row.get("credit") or row.get("Credit") or 0
         try:
-            subject_credits = max(0, int(float(str(credits_raw))))
+            subject_credits = max(0.0, float(str(credits_raw)))
         except (ValueError, TypeError):
-            subject_credits = 0
+            subject_credits = 0.0
             
         category = str(row.get("category") or row.get("Category") or "OTHER").strip().upper()
         if category not in VALID_CATEGORIES:
@@ -175,11 +207,11 @@ async def upload_other_subjects(rows: List[Dict[str, Any]]):
             if subject_name and db_sub_name:
                 if _clean_string(subject_name) != _clean_string(db_sub_name):
                     validation_errors.append(
-                        f"Row {row_idx}: Subject Name '{subject_name}' does not match registered name '{db_sub_name}' for code {subject_code}"
+                        f"Row {row_idx}: Subject Name '{subject_name}' does not match registered Subject Master name '{db_sub_name}' for code {subject_code}"
                     )
                     continue
             # Update credits in db.subjects if a valid value is provided and differs
-            existing_credits = int(existing_subject.get("credits") or 0)
+            existing_credits = float(existing_subject.get("credits") or 0)
             if subject_credits > 0 and subject_credits != existing_credits:
                 await db.subjects.update_one(
                     {"subjectCode": subject_code},
@@ -187,31 +219,12 @@ async def upload_other_subjects(rows: List[Dict[str, Any]]):
                 )
                 existing_subject["credits"] = subject_credits
         else:
-            # Auto-register new subject in db.subjects if it hasn't been uploaded yet
-            if not subject_name:
-                invalid_subject_codes.append(f"{subject_code} (Row {row_idx})")
-                continue
-            db_sub_name = subject_name
-            # Determine department from the first valid roll number
-            preview_rolls = [r.strip().upper() for r in re.split(r'[,;\s\n\r]+', roll_numbers_raw) if r.strip()]
-            auto_dept = "GENERAL"
-            for pr in preview_rolls:
-                preview_student = await db.students.find_one({"registerNumber": pr})
-                if not preview_student:
-                    preview_student = await db.students.find_one({"registerNumber": {"$regex": f"^{re.escape(pr)}$", "$options": "i"}})
-                if preview_student:
-                    auto_dept = str(preview_student.get("department", "GENERAL")).strip().upper()
-                    break
-            new_sub_doc = {
-                "subjectCode": subject_code,
-                "subjectName": subject_name,
-                "department": auto_dept,
-                "semester": subject_sem or 1,
-                "credits": subject_credits,
-                "paperType": "THEORY"
-            }
-            await db.subjects.insert_one(new_sub_doc)
-            existing_subject = new_sub_doc
+            # Subject MUST be available in Subject Master before assigning to students
+            invalid_subject_codes.append(f"{subject_code} (Row {row_idx}: Not found in Subject Master)")
+            validation_errors.append(
+                f"Row {row_idx}: Subject Code '{subject_code}' does not exist in Subject Master. Please add it to Academic Management / Subject Master first."
+            )
+            continue
 
 
         # 3. Split Roll Numbers using commas, newlines, spaces, or semicolons
@@ -297,6 +310,7 @@ async def upload_logins(users: List[Dict[str, Any]]):
                 skipped.append(f"{reg}: missing department"); continue
             sem_int = int(sem) if sem else 0
             yr_int  = int(yr)  if yr  else (int(sem_int / 2) if sem_int else None)
+            reg_val = str(user.get("regulation", "2021")).strip()
             await db.students.update_one(
                 {"registerNumber": reg},
                 {"$set": {
@@ -306,10 +320,32 @@ async def upload_logins(users: List[Dict[str, Any]]):
                     "department":     dept,
                     "semester":       sem_int,
                     "year":           yr_int,
+                    "regulation":     reg_val,
                     "role":           "student"
                 }},
                 upsert=True,
             )
+
+            # Assign existing regular subjects for this dept & sem if available
+            if dept and sem_int > 0:
+                async for reg_sub in db.subjects.find({"department": dept, "semester": sem_int}):
+                    sub_code = str(reg_sub.get("subjectCode", "")).strip().upper()
+                    if sub_code:
+                        await db.student_subjects.update_one(
+                            {"registerNumber": reg, "subjectCode": sub_code},
+                            {
+                                "$set": {
+                                    "registerNumber": reg,
+                                    "subjectCode": sub_code,
+                                    "subjectName": reg_sub.get("subjectName", ""),
+                                    "subjectSemester": sem_int,
+                                    "category": "REGULAR",
+                                    "department": dept
+                                }
+                            },
+                            upsert=True
+                        )
+
             students_in += 1
 
         elif role == "faculty":
@@ -543,36 +579,121 @@ async def get_all_subjects(
     subjectName: str = None,
     regulation: str = None,
 ):
-    """Return subjects with optional filters for the Setup module subject browser."""
-    query = {}
+    """
+    Return subjects that are currently assigned to students (from db.student_subjects)
+    enriched with metadata from Subject Master (db.subjects) for the Setup module subject browser.
+    """
+    st_query = {}
     if department and department.upper() != "ALL":
-        query["department"] = {"$regex": f"^{department.strip()}$", "$options": "i"}
-    if semester and semester != 0:
-        query["semester"] = int(semester)
+        st_query["department"] = {"$regex": f"^{department.strip()}$", "$options": "i"}
+    if semester and int(semester) != 0:
+        st_query["$or"] = [{"subjectSemester": int(semester)}, {"semester": int(semester)}]
     if subjectCode:
-        query["subjectCode"] = {"$regex": subjectCode.strip(), "$options": "i"}
-    if subjectName:
-        query["subjectName"] = {"$regex": subjectName.strip(), "$options": "i"}
-    if regulation and regulation.upper() != "ALL":
-        query["regulation"] = {"$regex": f"^{regulation.strip()}$", "$options": "i"}
-    docs = [clean_doc(doc) async for doc in db.subjects.find(query).sort([("department", 1), ("semester", 1), ("subjectCode", 1)])]
-    return docs
+        st_query["subjectCode"] = {"$regex": subjectCode.strip(), "$options": "i"}
+
+    # Group distinct assigned subjects by (subjectCode, department, semester)
+    distinct_assigned = {}
+    async for doc in db.student_subjects.find(st_query):
+        code = str(doc.get("subjectCode", "")).strip().upper()
+        if not code:
+            continue
+        dept = str(doc.get("department", "")).strip().upper()
+        sem = int(doc.get("subjectSemester") or doc.get("semester") or 1)
+        key = (code, dept, sem)
+        if key not in distinct_assigned:
+            distinct_assigned[key] = {
+                "subjectCode": code,
+                "department": dept,
+                "semester": sem,
+                "subjectName": doc.get("subjectName") or code,
+                "category": doc.get("category", "REGULAR")
+            }
+
+    # Pre-fetch all Master subjects for fast, flexible lookup
+    master_subjects_list = [clean_doc(s) async for s in db.subjects.find({})]
+
+    results = []
+    for (code, dept, sem), info in distinct_assigned.items():
+        clean_code = _clean_string(code)
+        
+        # 1. Exact match by code & dept with non-empty subjectName
+        master_doc = next((s for s in master_subjects_list if s.get("subjectCode") == code and s.get("department") == dept and s.get("subjectName")), None)
+        # 2. Match by code only with non-empty subjectName across any department
+        if not master_doc:
+            master_doc = next((s for s in master_subjects_list if s.get("subjectCode") == code and s.get("subjectName")), None)
+        # 3. Clean string match by code with non-empty subjectName
+        if not master_doc:
+            master_doc = next((s for s in master_subjects_list if _clean_string(s.get("subjectCode")) == clean_code and s.get("subjectName")), None)
+        # 4. Fallback to any matching doc if no doc has non-empty subjectName
+        if not master_doc:
+            master_doc = next((s for s in master_subjects_list if s.get("subjectCode") == code and s.get("department") == dept), None)
+        if not master_doc:
+            master_doc = next((s for s in master_subjects_list if s.get("subjectCode") == code), None)
+
+        reg = str(master_doc.get("regulation") or "2021").strip() if (master_doc and master_doc.get("regulation")) else "2021"
+        s_name = str(master_doc.get("subjectName") or info.get("subjectName") or "").strip() if master_doc else str(info.get("subjectName") or "").strip()
+        credits_val = float(master_doc.get("credits") or 0) if master_doc else 0.0
+        paper_type = str(master_doc.get("paperType") or "THEORY").strip().upper() if master_doc else "THEORY"
+
+        # Apply name & regulation filters if provided
+        if subjectName and not re.search(re.escape(subjectName.strip()), s_name, re.IGNORECASE):
+            continue
+        if regulation and regulation.upper() != "ALL" and reg and not re.search(f"^{re.escape(regulation.strip())}$", reg, re.IGNORECASE):
+            continue
+
+        results.append({
+            "_id": f"{code}_{dept}_{sem}",
+            "subjectCode": code,
+            "subjectName": s_name,
+            "department": dept,
+            "semester": sem,
+            "credits": credits_val,
+            "paperType": paper_type,
+            "regulation": reg,
+            "category": info["category"]
+        })
+
+    # Sort results by department, semester, subjectCode
+    results.sort(key=lambda x: (x["department"], x["semester"], x["subjectCode"]))
+    return results
 
 @router.delete("/subjects/{subjectCode}")
-async def delete_subject(subjectCode: str, department: str):
-    """Delete a single subject by subjectCode + department."""
+async def delete_subject(subjectCode: str, department: Optional[str] = Query(None), semester: Optional[int] = Query(None)):
+    """Unassign subject from particular department & semester (Setup Module). Preserves db.subjects."""
     code = subjectCode.strip().upper()
-    dept = department.strip().upper()
-    result = await db.subjects.delete_one({
-        "subjectCode": code,
-        "department": dept
-    })
-    # Also clean up student-specific subject assignments for this subject
-    await db.student_subjects.delete_many({"subjectCode": code})
+    q = {"subjectCode": code}
+    if department and department.strip().upper() != "ALL":
+        q["department"] = department.strip().upper()
+    if semester and int(semester) != 0:
+        q["subjectSemester"] = int(semester)
 
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail=f"Subject {subjectCode} not found for dept {department}")
-    return {"message": f"Subject {subjectCode} deleted successfully."}
+    result = await db.student_subjects.delete_many(q)
+    return {"message": f"Unassigned subject {code} for selected department/semester ({result.deleted_count} assignment(s) removed). Master record preserved."}
+
+@router.post("/subjects/setup-bulk-delete")
+async def setup_bulk_delete_subjects(payload: Dict[str, Any]):
+    """Bulk unassign subjects from db.student_subjects for Setup Module."""
+    items = payload.get("items", [])
+    total_deleted = 0
+
+    for item in items:
+        code = str(item.get("subjectCode") or "").strip().upper()
+        dept = str(item.get("department") or "").strip().upper()
+        sem = item.get("semester")
+
+        if not code:
+            continue
+
+        q = {"subjectCode": code}
+        if dept and dept != "ALL":
+            q["department"] = dept
+        if sem and int(sem) != 0:
+            q["subjectSemester"] = int(sem)
+
+        res = await db.student_subjects.delete_many(q)
+        total_deleted += res.deleted_count
+
+    return {"message": f"Successfully unassigned {total_deleted} subject record(s). Master subjects preserved.", "deletedCount": total_deleted}
 
 @router.post("/external")
 async def upload_external_marks(marks: List[ExternalMarksModel]):
@@ -680,12 +801,46 @@ async def unpublish_live_results(semester: str, department: str):
 
 @router.post("/save-question-paper")
 async def save_question_paper(paper: QuestionPaperModel):
-    await db.questionpapers.insert_one(paper.dict(exclude_none=True, exclude={"id"}))
-    return {"message": "Question Paper Saved to Admin Portal!"}
+    paper_dict = paper.dict(exclude_none=True, exclude={"id"})
+
+    sub_code = re.sub(r"[^A-Z0-9]", "", (paper.subjectCode or "").upper())
+    cia_num = "1"
+    if paper.unit:
+        m = re.search(r"\d+", paper.unit)
+        if m:
+            cia_num = m.group(0)
+
+    raw_qp = paper.qpCode or (f"CIA{cia_num}{sub_code}" if sub_code else "QP")
+    base_qp = re.sub(r"-\d+$", "", raw_qp.strip())
+
+    existing_count = await db.questionpapers.count_documents({
+        "subjectCode": paper.subjectCode,
+        "unit": paper.unit
+    })
+    seq = existing_count + 1
+    paper_dict["qpCode"] = f"{base_qp}-{seq:02d}"
+
+    await db.questionpapers.insert_one(paper_dict)
+    return {"message": "Question Paper Saved to Admin Portal!", "qpCode": paper_dict["qpCode"]}
 
 @router.get("/question-papers")
 async def get_question_papers():
-    return [clean_doc(doc) async for doc in db.questionpapers.find({})]
+    docs = [clean_doc(doc) async for doc in db.questionpapers.find({}).sort("_id", 1)]
+    base_counts = {}
+    for doc in docs:
+        if doc.get("qpCode") and re.search(r"-\d+$", doc["qpCode"]):
+            continue
+        sub_code = re.sub(r"[^A-Z0-9]", "", (doc.get("subjectCode") or doc.get("subject") or "").upper())
+        unit_val = doc.get("unit") or ""
+        cia_num = "1"
+        if unit_val:
+            m = re.search(r"\d+", unit_val)
+            if m:
+                cia_num = m.group(0)
+        base_qp = f"CIA{cia_num}{sub_code}" if sub_code else "QP"
+        base_counts[base_qp] = base_counts.get(base_qp, 0) + 1
+        doc["qpCode"] = f"{base_qp}-{base_counts[base_qp]:02d}"
+    return docs
 
 @router.delete("/question-paper/{paper_id}")
 async def delete_question_paper(paper_id: str):

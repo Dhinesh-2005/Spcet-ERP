@@ -25,21 +25,52 @@ class ResultService:
             sub = subject_map.get((em["subjectCode"], dept)) or subject_map.get(em["subjectCode"])
             if not sub:
                 continue
-            internal_score = 0.0
-            im = internal_map.get(reg_no, {}).get(em["subjectCode"])
-            if im:
-                internal_score = im.get("finalInternal", 0.0)
+            from app.services.arrear_service import arrear_service
+            arrear_info = await arrear_service.get_arrear_internal_and_rules(reg_no, em["subjectCode"])
             external_score = em.get("externalMarks", 0)
-            l = sub.get("l") or 0
-            t = sub.get("t") or 0
-            p = sub.get("p") or 0
-            if p > (l + t):
-                final_score = (internal_score * 0.5) + (external_score * 0.5)
+
+            if arrear_info["has_arrear_record"]:
+                pass_threshold = arrear_info["pass_threshold"]
+                if arrear_info["is_valid"]:
+                    internal_score = arrear_info["internal_mark"]
+                    l = sub.get("l") or 0
+                    t = sub.get("t") or 0
+                    p = sub.get("p") or 0
+                    if p > (l + t):
+                        final_score = (internal_score * 0.5) + (external_score * 0.5)
+                    else:
+                        final_score = (internal_score * 0.4) + (external_score * 0.6)
+                    rounded = int(round(final_score))
+                    if rounded >= 45 and external_score >= pass_threshold:
+                        status = "PASS"
+                    else:
+                        status = "FAIL"
+                else:
+                    final_score = float(external_score)
+                    rounded = int(round(final_score))
+                    if rounded >= pass_threshold and external_score >= pass_threshold:
+                        status = "PASS"
+                    else:
+                        status = "FAIL"
             else:
-                final_score = (internal_score * 0.4) + (external_score * 0.6)
-            rounded = int(round(final_score))
-            if rounded >= 45 and external_score >= 45:
-                status = "PASS"
+                internal_score = 0.0
+                im = internal_map.get(reg_no, {}).get(em["subjectCode"])
+                if im:
+                    internal_score = im.get("finalInternal", 0.0)
+                l = sub.get("l") or 0
+                t = sub.get("t") or 0
+                p = sub.get("p") or 0
+                if p > (l + t):
+                    final_score = (internal_score * 0.5) + (external_score * 0.5)
+                else:
+                    final_score = (internal_score * 0.4) + (external_score * 0.6)
+                rounded = int(round(final_score))
+                if rounded >= 45 and external_score >= 45:
+                    status = "PASS"
+                else:
+                    status = "FAIL"
+
+            if status == "PASS":
                 if rounded >= 91:
                     grade = "O"
                 elif rounded >= 81:

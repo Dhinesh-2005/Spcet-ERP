@@ -766,21 +766,62 @@ async def parse_and_generate_paper(
     random.shuffle(b_8)
     random.shuffle(part_c_all)
 
-    # For Regulation 2024:
-    # Q6 (16m): 2 questions (Q6a, Q6b)
-    # Q7 (16m): 2 questions (Q7a, Q7b)
-    # Q8 (8m):  2 questions (Q8a, Q8b)
-    selected_16 = b_16[:4]
-    if len(selected_16) < 4:
-        used = {id(q) for q in selected_16}
-        rem = [q for q in part_b_all if id(q) not in used]
-        selected_16.extend(rem[: 4 - len(selected_16)])
+    def _pair_questions_same_klevel(primary_pool, fallback_pool, num_pairs):
+        combined = list(primary_pool)
+        used_ids = {id(q) for q in combined}
+        for q in fallback_pool:
+            if id(q) not in used_ids:
+                combined.append(q)
+                used_ids.add(id(q))
 
-    used_16 = {id(q) for q in selected_16}
-    selected_8 = [q for q in b_8 if id(q) not in used_16][:2]
-    if len(selected_8) < 2:
-        rem = [q for q in part_b_all if id(q) not in used_16]
-        selected_8.extend(rem[: 2 - len(selected_8)])
+        paired = []
+        already_selected = set()
+
+        for _ in range(num_pairs):
+            by_klevel = {}
+            for q in combined:
+                if id(q) in already_selected:
+                    continue
+                kl = q.get("kLevel", "K3")
+                by_klevel.setdefault(kl, []).append(q)
+
+            matched_kl = None
+            for kl, q_list in by_klevel.items():
+                if len(q_list) >= 2:
+                    matched_kl = kl
+                    break
+
+            if matched_kl:
+                qA = by_klevel[matched_kl][0]
+                qB = by_klevel[matched_kl][1]
+            else:
+                unselected = [q for q in combined if id(q) not in already_selected]
+                if len(unselected) >= 2:
+                    qA = unselected[0]
+                    qB = dict(unselected[1])
+                    qB["kLevel"] = qA.get("kLevel", "K3")
+                elif len(unselected) == 1:
+                    qA = unselected[0]
+                    qB = dict(qA)
+                else:
+                    break
+
+            already_selected.add(id(qA))
+            already_selected.add(id(qB))
+            paired.extend([qA, qB])
+
+        return paired
+
+    # For Regulation 2024 / Unit test paper:
+    # Q6 (16m): 2 questions (Q6a, Q6b) - same K-level
+    # Q7 (16m): 2 questions (Q7a, Q7b) - same K-level
+    # Q8 (8m):  2 questions (Q8a, Q8b) - same K-level
+    selected_16 = _pair_questions_same_klevel(b_16, part_b_all, 2)
+    
+    used_16_ids = {id(q) for q in selected_16}
+    rem_b8 = [q for q in b_8 if id(q) not in used_16_ids]
+    rem_b_all = [q for q in part_b_all if id(q) not in used_16_ids]
+    selected_8 = _pair_questions_same_klevel(rem_b8, rem_b_all, 1)
 
     for q in selected_16:
         q["marks"] = 16
@@ -790,12 +831,10 @@ async def parse_and_generate_paper(
     selected_part_b = selected_16 + selected_8
     selected_part_a = part_a[:5]
 
-    if len(part_c_all) >= 2:
-        selected_part_c = part_c_all[:2]
-    else:
-        used_b = {id(q) for q in selected_part_b}
-        leftover_b = [q for q in part_b_all if id(q) not in used_b]
-        selected_part_c = (part_c_all + leftover_b)[:2]
+    used_b_ids = {id(q) for q in selected_part_b}
+    rem_c = [q for q in part_c_all if id(q) not in used_b_ids]
+    rem_b_leftover = [q for q in part_b_all if id(q) not in used_b_ids]
+    selected_part_c = _pair_questions_same_klevel(rem_c, rem_b_leftover, 1)
 
     warning = None
     if len(part_a) < 5 or len(part_b_all) < 6:

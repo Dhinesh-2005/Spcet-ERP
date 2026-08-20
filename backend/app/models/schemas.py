@@ -28,11 +28,11 @@ class SubjectModel(BaseModel):
     subjectCode: str
     subjectName: Optional[str] = None
     department: str
-    semester: int
+    semester: Optional[int] = None
     l: Optional[int] = 0
     t: Optional[int] = 0
     p: Optional[int] = 0
-    credits: Optional[int] = 0
+    credits: Optional[float] = 0.0
     paperType: Optional[str] = "THEORY"
     regulation: Optional[str] = None
 
@@ -78,6 +78,7 @@ class ResultModel(BaseModel):
 class QuestionPaperModel(BaseModel):
     id: Optional[str] = None
     subjectCode: str
+    qpCode: Optional[str] = None
     department: str
     examSession: Optional[str] = None
     hasPartC: Optional[bool] = False
@@ -141,5 +142,113 @@ class GenerateQuestionPaperRequest(BaseModel):
     partACount: Optional[int] = 5
     partBCount: Optional[int] = 4
     partCCount: Optional[int] = 2
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NEW ACADEMIC & RESULT SCHEMAS (Additive & Backward Compatible)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class DepartmentModel(BaseModel):
+    id: Optional[str] = None
+    code: str
+    name: str
+    codePrefix: Optional[str] = None
+    status: Optional[str] = "ACTIVE"
+
+class RegulationModel(BaseModel):
+    id: Optional[str] = None
+    code: str
+    name: str
+    effectiveYear: Optional[int] = None
+    status: Optional[str] = "ACTIVE"
+
+class AcademicYearModel(BaseModel):
+    id: Optional[str] = None
+    year: str  # e.g., "2026-2027"
+    isCurrent: Optional[bool] = False
+
+class SemesterModel(BaseModel):
+    id: Optional[str] = None
+    number: int
+    name: Optional[str] = None
+
+class StudentEnrollmentModel(BaseModel):
+    id: Optional[str] = None
+    registerNumber: str
+    academicYear: str
+    semester: int
+    department: str
+    section: Optional[str] = "A"
+    regulation: Optional[str] = None
+
+class FacultySubjectAccessModel(BaseModel):
+    id: Optional[str] = None
+    facultyId: str
+    facultyName: Optional[str] = ""
+    department: str
+    semester: Optional[int] = None
+    subjectCodes: List[str] = []
+
+class AssessmentComponent(BaseModel):
+    name: str  # e.g., "UT1", "UT2", "Unit 1", "Assignment", "Model"
+    maxMarks: float = 20.0
+    weightage: Optional[float] = 1.0
+
+class AssessmentConfigModel(BaseModel):
+    id: Optional[str] = None
+    department: str
+    semester: int
+    regulation: Optional[str] = None
+    subjectCode: Optional[str] = None  # None for default semester-wide config
+    components: List[AssessmentComponent] = []
+    totalInternalMaxMark: float = 40.0
+
+class StudentSubjectRecordModel(BaseModel):
+    id: Optional[str] = None
+    registerNumber: str
+    subjectCode: str
+    subjectName: str
+    semester: int
+    academicYear: Optional[str] = None
+    credits: int
+    subjectType: Optional[str] = "THEORY"
+    internalMark: Optional[float] = 0.0
+    externalMark: Optional[float] = 0.0
+    totalMark: Optional[float] = 0.0
+    grade: Optional[str] = "RA"
+    gradePoint: Optional[float] = 0.0
+    result: Optional[str] = "FAIL"
+    attemptNumber: Optional[int] = 1
+    category: Optional[str] = "REGULAR"
+
+class PreviousResultRow(BaseModel):
+    registerNumber: str
+    subjectCode: str
+    subjectName: str
+    semester: int
+    academicYear: Optional[str] = "2025-2026"
+    credits: int
+    grade: str
+    gradePoint: Optional[float] = None
+    result: Optional[str] = None
+
+class SaveFacultyMarksPayload(BaseModel):
+    subjectCode: str
+    semester: int
+    department: Optional[str] = None
+    marks: List[Dict[str, Any]]  # List of { registerNumber, componentMarks: { "UT1": 18, "Unit1": 15 }, finalInternal: 38 }
+    status: Optional[str] = "DRAFT"  # "DRAFT" or "SUBMITTED"
+
+class MarkHistoryModel(BaseModel):
+    id: Optional[str] = None
+    registerNumber: str
+    subjectCode: str
+    component: str
+    oldMark: Optional[Any] = None
+    newMark: Optional[Any] = None
+    facultyId: str
+    facultyName: Optional[str] = ""
+    timestamp: str
+
 
 

@@ -7,6 +7,9 @@ import mammoth from "mammoth"; // ✅ Added Mammoth for Docx reading
 
 import { API_BASE, normalizeRowKeys, readFirstSheet, readAllSheets, exportSemesterPaperDocx, exportUnitTestPaperDocx, exportClaimFormDocx, mergeResults, exportHallTicketsDocx } from "../utils.js";
 import GPACalculator from "./GPACalculator"; 
+import AcademicManagement from "./AcademicManagement";
+import PreviousResultsUpload from "./PreviousResultsUpload";
+import StudentAcademicHistory from "./StudentAcademicHistory"; 
 
 
 
@@ -112,6 +115,25 @@ export default function AdminDashboard({ onLogout }) {
   const [settingsError, setSettingsError] = useState("");
   const [settingsSuccess, setSettingsSuccess] = useState("");
 
+  // ARREAR MANAGER STATE
+  const [arrearRecords, setArrearRecords] = useState([]);
+  const [arrearSettings, setArrearSettings] = useState({ internalValiditySemesters: 3, expiredInternalTheoryPassPercentage: 50.0 });
+  const [arrearPreviewData, setArrearPreviewData] = useState([]);
+  const [arrearErrors, setArrearErrors] = useState([]);
+  const [arrearWarnings, setArrearWarnings] = useState([]);
+  const [isValidArrearUpload, setIsValidArrearUpload] = useState(false);
+  const [arrearSearchRollNo, setArrearSearchRollNo] = useState("");
+  const [arrearSearchSubject, setArrearSearchSubject] = useState("");
+  const [arrearSearchDept, setArrearSearchDept] = useState("ALL");
+  const [arrearSearchStatus, setArrearSearchStatus] = useState("");
+  const [selectedRecordForOverride, setSelectedRecordForOverride] = useState(null);
+  const [overrideStatus, setOverrideStatus] = useState("VALID");
+  const [overrideReason, setOverrideReason] = useState("");
+  const [overrideExpiry, setOverrideExpiry] = useState("");
+  const [arrearActiveSubView, setArrearActiveSubView] = useState("dashboard"); // "dashboard", "student", "subject"
+  const [selectedStudentForView, setSelectedStudentForView] = useState("");
+  const [selectedSubjectForView, setSelectedSubjectForView] = useState("");
+
   const deptRef = useRef(dept); 
   const manualDeptRef = useRef(manualDept); 
   const manualSemRef = useRef(manualSem);   
@@ -140,6 +162,146 @@ export default function AdminDashboard({ onLogout }) {
     }
     if (activeTab === "profiles") fetchProfiles();
   }, [activeTab, qPaperSubTab]);
+
+  useEffect(() => {
+    if (activeTab === "arrear_manager") {
+      fetchArrearSettings();
+      fetchArrearRecords();
+    }
+  }, [activeTab, arrearSearchRollNo, arrearSearchSubject, arrearSearchDept, arrearSearchStatus]);
+
+  const fetchArrearSettings = () => {
+    fetch(`${API_BASE}/api/arrears/settings`)
+      .then(res => res.ok ? res.json() : null)
+      .then(data => { if(data) setArrearSettings(data); })
+      .catch(e => console.error("Error fetching arrear settings", e));
+  };
+
+  const fetchArrearRecords = () => {
+    let url = `${API_BASE}/api/arrears/records?rollNo=${arrearSearchRollNo}&subjectCode=${arrearSearchSubject}&department=${arrearSearchDept}&status=${arrearSearchStatus}`;
+    fetch(url)
+      .then(res => res.ok ? res.json() : [])
+      .then(data => setArrearRecords(Array.isArray(data) ? data : []))
+      .catch(e => console.error("Error fetching arrear records", e));
+  };
+
+  const handleUpdateArrearSettings = (e) => {
+    e.preventDefault();
+    fetch(`${API_BASE}/api/arrears/settings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(arrearSettings)
+    })
+      .then(res => res.ok ? res.json() : Promise.reject())
+      .then(() => {
+        setMessage("🎉 Arrear Settings updated successfully!");
+        fetchArrearSettings();
+        fetchArrearRecords();
+      })
+      .catch(() => setMessage("❌ Failed to update Arrear Settings"));
+  };
+
+  const handleDownloadArrearTemplate = () => {
+    const ws = XLSX.utils.json_to_sheet([
+      { "Roll No": "112721104001", "Subject Code": "CS3451", "Original Semester": 3, "Internal Mark": 17.5 }
+    ]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Arrear Internals Template");
+    XLSX.writeFile(wb, "Arrear_Internals_Template.xlsx");
+  };
+
+  const handleArrearExcelUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    readFirstSheet(file, (rows) => {
+      setLoading(true);
+      fetch(`${API_BASE}/api/arrears/validate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(rows)
+      })
+        .then(res => res.ok ? res.json() : Promise.reject("Validation failed"))
+        .then(data => {
+          setArrearPreviewData(data.preview || []);
+          setArrearErrors(data.errors || []);
+          setArrearWarnings(data.warnings || []);
+          setIsValidArrearUpload(data.valid);
+          if (data.valid) {
+            setMessage("✅ Excel validation passed. Review preview and confirm.");
+          } else {
+            setMessage("⚠️ Excel validation failed. Please check errors.");
+          }
+        })
+        .catch(err => {
+          setMessage(`❌ Upload Error: ${err}`);
+        })
+        .finally(() => setLoading(false));
+    });
+  };
+
+  const handleConfirmArrearSave = () => {
+    if (arrearPreviewData.length === 0) return;
+    setLoading(true);
+    fetch(`${API_BASE}/api/arrears/save`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(arrearPreviewData)
+    })
+      .then(res => res.ok ? res.json() : Promise.reject("Save failed"))
+      .then(data => {
+        setMessage(`🎉 ${data.message}`);
+        setArrearPreviewData([]);
+        setArrearErrors([]);
+        setArrearWarnings([]);
+        setIsValidArrearUpload(false);
+        fetchArrearRecords();
+      })
+      .catch(err => setMessage(`❌ Save Error: ${err}`))
+      .finally(() => setLoading(false));
+  };
+
+  const handleSaveOverride = (e) => {
+    e.preventDefault();
+    if (!selectedRecordForOverride) return;
+    fetch(`${API_BASE}/api/arrears/override`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        registerNumber: selectedRecordForOverride.registerNumber,
+        subjectCode: selectedRecordForOverride.subjectCode,
+        status: overrideStatus,
+        reason: overrideReason,
+        overrideExpirySem: overrideExpiry ? parseInt(overrideExpiry) : null
+      })
+    })
+      .then(res => res.ok ? res.json() : Promise.reject())
+      .then(data => {
+        setMessage(`🎉 Override updated: ${data.message}`);
+        setSelectedRecordForOverride(null);
+        setOverrideReason("");
+        setOverrideExpiry("");
+        fetchArrearRecords();
+      })
+      .catch(() => setMessage("❌ Failed to apply override"));
+  };
+
+  const handleRemoveOverride = (rec) => {
+    if (!confirm("Are you sure you want to remove this override?")) return;
+    fetch(`${API_BASE}/api/arrears/remove-override`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        registerNumber: rec.registerNumber,
+        subjectCode: rec.subjectCode
+      })
+    })
+      .then(res => res.ok ? res.json() : Promise.reject())
+      .then(() => {
+        setMessage("🎉 Override removed successfully.");
+        fetchArrearRecords();
+      })
+      .catch(() => setMessage("❌ Failed to remove override"));
+  };
 
   const fetchProfiles = async () => {
      try {
@@ -186,6 +348,24 @@ export default function AdminDashboard({ onLogout }) {
   const [sbList, setSbList]         = useState([]);
   const [sbLoading, setSbLoading]   = useState(false);
   const [sbDeleteId, setSbDeleteId] = useState(null); // subjectCode being confirmed for delete
+  const [sbSelectedKeys, setSbSelectedKeys] = useState([]);
+
+  const getSbKey = (s) => s._id || s.id || `${s.subjectCode}_${s.department}_${s.regulation || ""}`;
+
+  const toggleSbSelectSubject = (s) => {
+    const key = getSbKey(s);
+    setSbSelectedKeys((prev) =>
+      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]
+    );
+  };
+
+  const toggleSbSelectAll = () => {
+    if (sbSelectedKeys.length === sbList.length && sbList.length > 0) {
+      setSbSelectedKeys([]);
+    } else {
+      setSbSelectedKeys(sbList.map(getSbKey));
+    }
+  };
 
   const apiPost = async (endpoint, body, isFile = false) => {
     setLoading(true); setMessage("");
@@ -289,11 +469,15 @@ export default function AdminDashboard({ onLogout }) {
     setSbLoading(false);
   };
 
-  const deleteSubject = async (subjectCode, department) => {
+  const deleteSubject = async (subjectCode, department, semester) => {
     setSbDeleteId(null);
     try {
+      const params = new URLSearchParams();
+      if (department) params.append("department", department);
+      if (semester) params.append("semester", semester);
+
       const res = await fetch(
-        `${API_BASE}/api/import/subjects/${subjectCode}?department=${encodeURIComponent(department)}`,
+        `${API_BASE}/api/import/subjects/${subjectCode}?${params.toString()}`,
         { method: "DELETE" }
       );
       const data = await res.json();
@@ -304,6 +488,36 @@ export default function AdminDashboard({ onLogout }) {
         setMessage(`❌ ${data.detail || "Delete failed"}`);
       }
     } catch { setMessage("❌ Network error during delete."); }
+  };
+
+  const handleSbBulkDelete = async () => {
+    if (sbSelectedKeys.length === 0) return;
+    if (!window.confirm(`Are you sure you want to unassign ${sbSelectedKeys.length} selected subject(s) for the selected department/semester? (Master subjects will be preserved)`)) return;
+
+    try {
+      const selectedSubjects = sbList.filter((s) => sbSelectedKeys.includes(getSbKey(s)));
+      const items = selectedSubjects.map((s) => ({
+        subjectCode: s.subjectCode,
+        department: s.department,
+        semester: s.semester,
+      }));
+
+      const res = await fetch(`${API_BASE}/api/import/subjects/setup-bulk-delete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setMessage(`🗑️ ${data.message}`);
+        setSbSelectedKeys([]);
+        fetchAllSubjects();
+      } else {
+        setMessage(`❌ ${data.detail || "Failed to unassign subjects."}`);
+      }
+    } catch {
+      setMessage("❌ Network error during bulk delete.");
+    }
   };
 
   const handleSubjectUpload = (e) => {
@@ -320,7 +534,7 @@ export default function AdminDashboard({ onLogout }) {
         const subjectName = String(n.subjectname || n.name || n.subname || "").trim();
         const department  = String(n.department || n.dept || "").toUpperCase().trim();
         const semester    = parseInt(n.semester || n.sem || "0", 10);
-        const credits     = parseInt(n.credits || n.credit || n.c || "0", 10);
+        const credits     = parseFloat(n.credits || n.credit || n.c || "0") || 0;
 
         let paperType = "THEORY";
         const pt = String(n.papertype || n.type || n.paper || "").toUpperCase().trim();
@@ -357,7 +571,7 @@ export default function AdminDashboard({ onLogout }) {
       });
 
       if (valid.length === 0) {
-        setMessage(`⚠️ No valid subjects found across sheets. ${skipped.length > 0 ? skipped.join("; ") : "Check column headers: Subject Code, Subject Name, Department, Semester, Credits, Paper Type"}`);
+        setMessage(`⚠️ No valid subjects found across sheets. ${skipped.length > 0 ? skipped.join("; ") : "Check column headers: Subject Code | Department | Semester"}`);
         return;
       }
 
@@ -379,7 +593,7 @@ export default function AdminDashboard({ onLogout }) {
         const subjectCode     = String(n.subjectcode || n.code || n.subcode || "").toUpperCase().trim();
         const subjectName     = String(n.subjectname || n.name || n.subname || "").trim();
         const subjectSemester = parseInt(n.subjectsemester || n.semester || n.sem || "0", 10);
-        const credits         = parseInt(n.credits || n.credit || "0", 10) || 0;
+        const credits         = parseFloat(n.credits || n.credit || "0") || 0;
         const category        = String(n.category || n.cat || "OTHER").toUpperCase().trim();
         const rollNumbers     = String(n.registerNumber || n.registernumber || n.rollnumbers || n.rollnumber || n.rollno || n.registernumbers || n.regnos || "").trim();
 
@@ -397,7 +611,7 @@ export default function AdminDashboard({ onLogout }) {
       });
 
       if (valid.length === 0) {
-        setMessage(`⚠️ No valid rows found across sheets. ${skipped.length > 0 ? skipped.join("; ") : "Check columns: Subject Code, Subject Name, Subject Semester, Category, Roll Numbers"}`);
+        setMessage(`⚠️ No valid rows found across sheets. ${skipped.length > 0 ? skipped.join("; ") : "Check columns: Subject Code | Subject Semester | Category | Roll Number"}`);
         return;
       }
 
@@ -406,7 +620,9 @@ export default function AdminDashboard({ onLogout }) {
     });
   };
 
-  const handleLoginUpload = (e) => {
+  const [studentRegulation, setStudentRegulation] = useState("2021");
+
+  const handleStudentUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
 
@@ -424,8 +640,7 @@ export default function AdminDashboard({ onLogout }) {
         const department     = String(n.department || n.dept || "").toUpperCase().trim();
         const semester       = parseInt(n.semester || n.sem || "0", 10);
         const year           = parseInt(n.year || "0", 10) || null;
-        const roleRaw = String(n.role || uploadRole || "student").toLowerCase().trim();
-        const role    = ["student", "faculty", "hod"].includes(roleRaw) ? roleRaw : "student";
+        const rowReg         = String(n.regulation || n.reg || studentRegulation || "2021").trim();
 
         let password = rawPassword || rawDob;
         if (!rawPassword && rawDob) {
@@ -442,20 +657,67 @@ export default function AdminDashboard({ onLogout }) {
         }
 
         if (!registerNumber) { skipped.push(`Row ${idx+2}: missing Register Number`); return; }
-        if (!department && (role === "student" || role === "faculty" || role === "hod")) { skipped.push(`${registerNumber}: missing Department`); return; }
-        if (!semester && role === "student")   { skipped.push(`${registerNumber}: missing Semester`);   return; }
+        if (!department) { skipped.push(`${registerNumber}: missing Department`); return; }
+        if (!semester)   { skipped.push(`${registerNumber}: missing Semester`);   return; }
 
-        valid.push({ registerNumber, name, password, department, semester, year, role });
+        valid.push({ registerNumber, name, password, department, semester, year, role: "student", regulation: rowReg });
       });
 
       if (valid.length === 0) {
-        setMessage(`⚠️ No valid rows found across sheets. ${skipped.length > 0 ? skipped.join("; ") : "Check columns: Register Number, Name, DOB, Department, Semester, Year, Role"}`);
+        setMessage(`⚠️ No valid student rows found. ${skipped.length > 0 ? skipped.join("; ") : "Check columns: Register Number, Name, DOB, Department, Semester, Year"}`);
         return;
       }
 
-      const byRole = valid.reduce((a, v) => { a[v.role] = (a[v.role]||0)+1; return a; }, {});
-      const summary = Object.entries(byRole).map(([r,c]) => `${c} ${r}(s)`).join(", ");
-      setMessage(`\ud83d\udce4 Uploading: ${summary}${skipped.length > 0 ? ` | ${skipped.length} skipped` : ""}...`);
+      setMessage(`📤 Uploading ${valid.length} student(s) under Regulation ${studentRegulation}${skipped.length > 0 ? ` | ${skipped.length} skipped` : ""}...`);
+      apiPost("/api/import/logins", valid);
+    });
+  };
+
+  const handleFacultyUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    readAllSheets(file, (rows) => {
+      const valid   = [];
+      const skipped = [];
+
+      rows.forEach((r, idx) => {
+        const n = normalizeRowKeys(r);
+
+        const registerNumber = (n.registerNumber || n.registernumber || n.facultyid || n.id || "").trim();
+        const name           = (n.name || "").trim();
+        const rawDob         = String(n.dob || n.dateofbirth || n.birthdate || "").trim();
+        const rawPassword    = String(n.password || n.pass || "").trim();
+        const department     = String(n.department || n.dept || "").toUpperCase().trim();
+        const roleRaw        = String(n.role || "faculty").toLowerCase().trim();
+        const role           = ["faculty", "hod"].includes(roleRaw) ? roleRaw : "faculty";
+
+        let password = rawPassword || rawDob;
+        if (!rawPassword && rawDob) {
+          if (/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}$/.test(rawDob)) {
+            const p = rawDob.split(/[\/\-]/);
+            password = `${p[0].padStart(2,"0")}-${p[1].padStart(2,"0")}-${p[2]}`;
+          } else if (/^\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}$/.test(rawDob)) {
+            const p = rawDob.split(/[\/\-]/);
+            password = `${p[2].padStart(2,"0")}-${p[1].padStart(2,"0")}-${p[0]}`;
+          } else if (!isNaN(rawDob) && Number(rawDob) > 20000) {
+            const d = new Date((Number(rawDob) - 25569) * 86400 * 1000);
+            password = `${String(d.getDate()).padStart(2,"0")}-${String(d.getMonth()+1).padStart(2,"0")}-${d.getFullYear()}`;
+          }
+        }
+
+        if (!registerNumber) { skipped.push(`Row ${idx+2}: missing Register/Faculty ID`); return; }
+        if (!department)     { skipped.push(`${registerNumber}: missing Department`); return; }
+
+        valid.push({ registerNumber, name, password, department, role });
+      });
+
+      if (valid.length === 0) {
+        setMessage(`⚠️ No valid faculty/HOD rows found. ${skipped.length > 0 ? skipped.join("; ") : "Check columns: Register Number/Faculty ID, Name, DOB, Department, Role"}`);
+        return;
+      }
+
+      setMessage(`📤 Uploading ${valid.length} faculty/HOD credential(s)...`);
       apiPost("/api/import/logins", valid);
     });
   };
@@ -1004,6 +1266,8 @@ export default function AdminDashboard({ onLogout }) {
         
         {/* TAB NAVIGATION */}
         <div className="flex gap-4 border-b border-gray-200 mb-6 overflow-x-auto print:hidden">
+          <button onClick={() => setActiveTab("academic")} className={`pb-2 px-4 font-bold transition-colors ${activeTab === "academic" ? "border-b-2 border-indigo-600 text-indigo-700" : "text-gray-500 hover:text-indigo-700"}`}>🏛️ Academic Management</button>
+          <button onClick={() => setActiveTab("prev_results")} className={`pb-2 px-4 font-bold transition-colors ${activeTab === "prev_results" ? "border-b-2 border-emerald-600 text-emerald-700" : "text-gray-500 hover:text-emerald-700"}`}>📊 Previous Results Import</button>
           <button onClick={() => setActiveTab("qpapers")} className={`pb-2 px-4 font-bold transition-colors ${activeTab === "qpapers" ? "border-b-2 border-purple-600 text-purple-700" : "text-gray-500 hover:text-purple-700"}`}>1. Question Papers</button>
           <button onClick={() => setActiveTab("setup")} className={`pb-2 px-4 font-medium transition-colors ${activeTab === "setup" ? "border-b-2 border-indigo-600 text-indigo-600" : "text-gray-500"}`}>2. Setup</button>
           <button onClick={() => setActiveTab("excel")} className={`pb-2 px-4 font-medium transition-colors ${activeTab === "excel" ? "border-b-2 border-indigo-600 text-indigo-600" : "text-gray-500"}`}>3. Excel Uploads</button>
@@ -1013,12 +1277,14 @@ export default function AdminDashboard({ onLogout }) {
           <button onClick={() => setActiveTab("halltickets")} className={`pb-2 px-4 font-bold transition-colors ${activeTab === "halltickets" ? "border-b-2 border-pink-600 text-pink-700" : "text-gray-500 hover:text-pink-700"}`}>7. Hall Tickets</button>
           <button onClick={() => setActiveTab("gpa")} className={`pb-2 px-4 font-bold transition-colors ${activeTab === "gpa" ? "border-b-2 border-indigo-600 text-indigo-700" : "text-gray-500 hover:text-indigo-700"}`}>8. GPA Calc</button>
           <button onClick={() => setActiveTab("profiles")} className={`pb-2 px-4 font-bold transition-colors ${activeTab === "profiles" ? "border-b-2 border-blue-600 text-blue-700" : "text-gray-500 hover:text-blue-700"}`}>9. Profiles</button>
+          <button onClick={() => setActiveTab("arrear_manager")} className={`pb-2 px-4 font-bold transition-colors ${activeTab === "arrear_manager" ? "border-b-2 border-rose-600 text-rose-700" : "text-gray-500 hover:text-rose-700"}`}>🚨 Arrear Manager</button>
           <button onClick={() => setActiveTab("settings")} className={`pb-2 px-4 font-bold transition-colors ${activeTab === "settings" ? "border-b-2 border-slate-600 text-slate-700" : "text-gray-500 hover:text-slate-700"}`}>10. Settings</button>
         </div>
 
-
-
         <AnimatePresence>{message && <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className={`p-4 rounded-md mb-6 text-sm font-medium shadow-sm ${message.startsWith("✅") || message.startsWith("🎉") ? "bg-green-50 text-green-700 border border-green-200" : "bg-red-50 text-red-700 border border-red-200"}`}>{message}</motion.div>}</AnimatePresence>
+
+        {activeTab === "academic" && <AcademicManagement />}
+        {activeTab === "prev_results" && <PreviousResultsUpload />}
 
         {/* PROFILES VIEW */}
 
@@ -1564,7 +1830,7 @@ export default function AdminDashboard({ onLogout }) {
                     <span className="bg-indigo-200 text-indigo-800 text-[10px] font-bold px-2 py-0.5 rounded">Existing Workflow</span>
                   </div>
                   <p className="text-xs text-gray-600">Assigns common subjects for all students in the selected department &amp; semester.</p>
-                  <p className="text-xs text-slate-500 font-mono">Excel Format: Subject Code | Subject Name | Department | Semester | Credits | Paper Type</p>
+                  <p className="text-xs text-slate-700 font-mono font-semibold">Excel Format: Subject Code | Department | Semester</p>
                   <label className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg text-xs cursor-pointer inline-flex items-center gap-1.5 transition-colors shadow-sm">
                     <span>📘</span> Upload Regular Subjects
                     <input type="file" onChange={handleSubjectUpload} accept=".xlsx, .csv" className="hidden" />
@@ -1578,27 +1844,65 @@ export default function AdminDashboard({ onLogout }) {
                     <span className="bg-purple-200 text-purple-800 text-[10px] font-bold px-2 py-0.5 rounded">New Feature</span>
                   </div>
                   <p className="text-xs text-gray-600">Assigns specific subjects (Arrears, Honours, Minors, Electives, Value Added, etc.) to individual students.</p>
-                  <p className="text-xs text-slate-500 font-mono">Excel Format: Subject Code | Subject Name | Subject Semester | Credits | Category | Roll Number</p>
+                  <p className="text-xs text-slate-700 font-mono font-semibold">Excel Format: Subject Code | Subject Semester | Category | Roll Number</p>
                   <label className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-lg text-xs cursor-pointer inline-flex items-center gap-1.5 transition-colors shadow-sm">
                     <span>🎓</span> Upload Other Subjects
                     <input type="file" onChange={handleOtherSubjectUpload} accept=".xlsx, .csv" className="hidden" />
                   </label>
                 </div>
               </div>
-              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-                <h3 className="font-bold text-lg text-gray-700 mb-1">2. Upload Students / Logins</h3>
-                <p className="text-xs text-gray-500 mb-1">Upload student, HOD, or faculty credentials from Excel.</p>
-                <p className="text-xs text-slate-400 mb-3 font-mono">Columns: Register Number | Name | DOB | Department | Semester | Year | Role</p>
-                <p className="text-xs text-gray-400 mb-2">Password = DOB (DD-MM-YYYY). Role column in file takes priority over selector below.</p>
-                <div className="mb-2">
-                  <label className="text-xs font-bold text-gray-500 mr-2">Fallback Role:</label>
-                  <select value={uploadRole} onChange={(e) => setUploadRole(e.target.value)} className="text-xs border border-gray-300 rounded px-2 py-1">
-                    <option value="student">STUDENT</option>
-                    <option value="hod">HOD</option>
-                    <option value="faculty">FACULTY</option>
-                  </select>
+              {/* 2. Separate Upload Cards for Students and Faculty */}
+              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 space-y-4">
+                <h3 className="font-bold text-lg text-gray-700">2. User & Login Uploads</h3>
+
+                {/* Student Upload Option */}
+                <div className="p-4 rounded-lg bg-blue-50/60 border border-blue-100 space-y-3">
+                  <div className="flex justify-between items-center">
+                    <h4 className="font-bold text-sm text-blue-900">Option A – Upload Students</h4>
+                    <span className="bg-blue-200 text-blue-800 text-[10px] font-bold px-2 py-0.5 rounded">Student Logins</span>
+                  </div>
+                  <p className="text-xs text-gray-600">Upload student credentials from Excel. Student regulation can be selected below.</p>
+                  <p className="text-xs text-slate-500 font-mono">Columns: Register Number | Name | DOB | Department | Semester | Year</p>
+
+                  <div className="flex items-center gap-3">
+                    <div>
+                      <label className="text-xs font-bold text-gray-600 mr-2">Target Regulation:</label>
+                      <select
+                        value={studentRegulation}
+                        onChange={(e) => setStudentRegulation(e.target.value)}
+                        className="text-xs border border-blue-300 rounded-lg px-3 py-1.5 font-bold text-blue-800 bg-white focus:ring-2 focus:ring-blue-500"
+                      >
+                        <option value="2021">Regulation 2021</option>
+                        <option value="2024">Regulation 2024</option>
+                        <option value="2017">Regulation 2017</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <input
+                    type="file"
+                    onChange={handleStudentUpload}
+                    accept=".xlsx, .csv"
+                    className="block w-full text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-blue-600 file:text-white file:font-bold hover:file:bg-blue-700 cursor-pointer"
+                  />
                 </div>
-                <input type="file" onChange={handleLoginUpload} accept=".xlsx, .csv" className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer" />
+
+                {/* Faculty & Staff Upload Option */}
+                <div className="p-4 rounded-lg bg-emerald-50/60 border border-emerald-100 space-y-3">
+                  <div className="flex justify-between items-center">
+                    <h4 className="font-bold text-sm text-emerald-900">Option B – Upload Faculty / HODs</h4>
+                    <span className="bg-emerald-200 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded">Staff Logins</span>
+                  </div>
+                  <p className="text-xs text-gray-600">Upload faculty or HOD credentials from Excel.</p>
+                  <p className="text-xs text-slate-500 font-mono">Columns: Faculty ID / Register Number | Name | DOB | Department | Role (Faculty / HOD)</p>
+
+                  <input
+                    type="file"
+                    onChange={handleFacultyUpload}
+                    accept=".xlsx, .csv"
+                    className="block w-full text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-emerald-600 file:text-white file:font-bold hover:file:bg-emerald-700 cursor-pointer"
+                  />
+                </div>
               </div>
               <div className="bg-indigo-50 p-6 rounded-xl shadow-sm border border-indigo-100 col-span-1 md:col-span-2">
                 <h3 className="font-bold text-lg mb-2 text-indigo-800">🎓 Semester Promotion Engine</h3>
@@ -1666,13 +1970,24 @@ export default function AdminDashboard({ onLogout }) {
                     <input value={sbName} onChange={e => setSbName(e.target.value)} onKeyDown={e => e.key === "Enter" && fetchAllSubjects()} placeholder="e.g. Compiler Design" className="w-full p-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-400" />
                   </div>
                 </div>
-                <div className="flex gap-2">
-                  <button onClick={fetchAllSubjects} disabled={sbLoading} className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white font-bold px-5 py-2 rounded-lg text-sm transition-all active:scale-95 flex items-center gap-2">
-                    {sbLoading ? <span className="animate-spin">⏳</span> : "🔍"} {sbLoading ? "Searching..." : "Search Subjects"}
-                  </button>
-                  <button onClick={() => { setSbDept("ALL"); setSbSem(0); setSbReg("ALL"); setSbCode(""); setSbName(""); setSbList([]); setMessage(""); }} className="bg-gray-100 hover:bg-gray-200 text-gray-600 font-semibold px-4 py-2 rounded-lg text-sm transition-all">
-                    ✕ Clear
-                  </button>
+                <div className="flex gap-2 items-center justify-between">
+                  <div className="flex gap-2">
+                    <button onClick={fetchAllSubjects} disabled={sbLoading} className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white font-bold px-5 py-2 rounded-lg text-sm transition-all active:scale-95 flex items-center gap-2">
+                      {sbLoading ? <span className="animate-spin">⏳</span> : "🔍"} {sbLoading ? "Searching..." : "Search Subjects"}
+                    </button>
+                    <button onClick={() => { setSbDept("ALL"); setSbSem(0); setSbReg("ALL"); setSbCode(""); setSbName(""); setSbList([]); setSbSelectedKeys([]); setMessage(""); }} className="bg-gray-100 hover:bg-gray-200 text-gray-600 font-semibold px-4 py-2 rounded-lg text-sm transition-all">
+                      ✕ Clear
+                    </button>
+                  </div>
+
+                  {sbSelectedKeys.length > 0 && (
+                    <button
+                      onClick={handleSbBulkDelete}
+                      className="bg-rose-600 hover:bg-rose-700 text-white font-bold px-4 py-2 rounded-lg text-sm transition-all flex items-center gap-1.5 shadow animate-pulse"
+                    >
+                      🗑️ Delete Selected ({sbSelectedKeys.length})
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -1682,6 +1997,15 @@ export default function AdminDashboard({ onLogout }) {
                   <table className="w-full text-sm text-left border-collapse">
                     <thead className="bg-slate-100 text-slate-600 uppercase text-xs font-bold sticky top-0 shadow-sm z-10">
                       <tr>
+                        <th className="px-3 py-3 text-center w-10">
+                          <input
+                            type="checkbox"
+                            checked={sbList.length > 0 && sbSelectedKeys.length === sbList.length}
+                            onChange={toggleSbSelectAll}
+                            className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500 cursor-pointer"
+                            title="Select / Deselect All"
+                          />
+                        </th>
                         <th className="px-4 py-3">Subject Code</th>
                         <th className="px-4 py-3">Subject Name</th>
                         <th className="px-4 py-3 text-center">Dept</th>
@@ -1693,35 +2017,47 @@ export default function AdminDashboard({ onLogout }) {
                       </tr>
                     </thead>
                     <tbody>
-                      {sbList.map((s, i) => (
-                        <tr key={`${s.subjectCode}-${s.department}-${i}`} className={`border-t border-gray-100 ${i % 2 === 0 ? "bg-white" : "bg-slate-50"} hover:bg-indigo-50 transition-colors`}>
-                          <td className="px-4 py-3 font-bold text-indigo-700 font-mono">{s.subjectCode}</td>
-                          <td className="px-4 py-3 text-gray-800">{s.subjectName}</td>
-                          <td className="px-4 py-3 text-center">
-                            <span className="bg-blue-100 text-blue-800 text-xs font-bold px-2 py-0.5 rounded">{s.department}</span>
-                          </td>
-                          <td className="px-4 py-3 text-center font-semibold text-gray-700">Sem {s.semester}</td>
-                          <td className="px-4 py-3 text-center font-semibold text-xs"><span className="bg-amber-100 text-amber-800 px-2 py-0.5 rounded font-bold">{s.regulation || "—"}</span></td>
-                          <td className="px-4 py-3 text-center font-bold text-gray-700">{s.credits}</td>
-                          <td className="px-4 py-3 text-center">
-                            <span className={`text-xs font-bold px-2 py-0.5 rounded ${s.paperType === "THEORY" ? "bg-green-100 text-green-700" : s.paperType === "PRACTICAL" ? "bg-purple-100 text-purple-700" : "bg-orange-100 text-orange-700"}`}>
-                              {s.paperType}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-center">
-                            {sbDeleteId === s.subjectCode + s.department ? (
-                              <div className="flex items-center gap-1 justify-center">
-                                <button onClick={() => deleteSubject(s.subjectCode, s.department)} className="bg-red-600 hover:bg-red-700 text-white text-xs font-bold px-2 py-1 rounded transition-all">Yes</button>
-                                <button onClick={() => setSbDeleteId(null)} className="bg-gray-200 hover:bg-gray-300 text-gray-700 text-xs font-bold px-2 py-1 rounded transition-all">No</button>
-                              </div>
-                            ) : (
-                              <button onClick={() => setSbDeleteId(s.subjectCode + s.department)} title="Remove subject" className="text-red-400 hover:text-red-600 hover:bg-red-50 p-1.5 rounded transition-all">
-                                🗑️
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
+                      {sbList.map((s, i) => {
+                        const key = getSbKey(s);
+                        const isChecked = sbSelectedKeys.includes(key);
+                        return (
+                          <tr key={`${s.subjectCode}-${s.department}-${i}`} className={`border-t border-gray-100 ${isChecked ? "bg-indigo-50/50" : i % 2 === 0 ? "bg-white" : "bg-slate-50"} hover:bg-indigo-50 transition-colors`}>
+                            <td className="px-3 py-3 text-center">
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={() => toggleSbSelectSubject(s)}
+                                className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500 cursor-pointer"
+                              />
+                            </td>
+                            <td className="px-4 py-3 font-bold text-indigo-700 font-mono">{s.subjectCode}</td>
+                            <td className="px-4 py-3 text-gray-800">{s.subjectName}</td>
+                            <td className="px-4 py-3 text-center">
+                              <span className="bg-blue-100 text-blue-800 text-xs font-bold px-2 py-0.5 rounded">{s.department}</span>
+                            </td>
+                            <td className="px-4 py-3 text-center font-semibold text-gray-700">Sem {s.semester}</td>
+                            <td className="px-4 py-3 text-center font-semibold text-xs"><span className="bg-amber-100 text-amber-800 px-2 py-0.5 rounded font-bold">{s.regulation || "—"}</span></td>
+                            <td className="px-4 py-3 text-center font-bold text-gray-700">{s.credits}</td>
+                            <td className="px-4 py-3 text-center">
+                              <span className={`text-xs font-bold px-2 py-0.5 rounded ${s.paperType === "THEORY" ? "bg-green-100 text-green-700" : s.paperType === "PRACTICAL" ? "bg-purple-100 text-purple-700" : "bg-orange-100 text-orange-700"}`}>
+                                {s.paperType}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-center">
+                              {sbDeleteId === s.subjectCode + s.department ? (
+                                <div className="flex items-center gap-1 justify-center">
+                                  <button onClick={() => deleteSubject(s.subjectCode, s.department, s.semester)} className="bg-red-600 hover:bg-red-700 text-white text-xs font-bold px-2 py-1 rounded transition-all">Yes</button>
+                                  <button onClick={() => setSbDeleteId(null)} className="bg-gray-200 hover:bg-gray-300 text-gray-700 text-xs font-bold px-2 py-1 rounded transition-all">No</button>
+                                </div>
+                              ) : (
+                                <button onClick={() => setSbDeleteId(s.subjectCode + s.department)} title="Unassign subject for this dept & sem" className="text-red-400 hover:text-red-600 hover:bg-red-50 p-1.5 rounded transition-all">
+                                  🗑️
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -1738,35 +2074,18 @@ export default function AdminDashboard({ onLogout }) {
         
         {activeTab === "excel" && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
-            <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-100 mb-6">
-                <div className="flex justify-between mb-6"><h2 className="text-lg font-bold text-gray-800">Upload Internal Marks (Excel)</h2></div>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+            <div className="bg-amber-50 p-6 rounded-xl border border-amber-200">
+                <div className="flex items-start gap-3">
+                  <span className="text-2xl">ℹ️</span>
                   <div>
-                    <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Department</label>
-                    <select value={dept} onChange={(e) => setDept(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md font-bold text-gray-700 bg-white">
-                      <option value="ALL">ALL DEPARTMENTS</option>
-                      {DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Semester</label>
-                    <select value={sem} onChange={(e) => setSem(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md font-bold text-gray-700 bg-white">
-                      <option value="ALL">ALL SEMESTERS</option>
-                      {[1, 2, 3, 4, 5, 6, 7, 8, 99].map((n) => <option key={n} value={n}>{n === 99 ? "Graduated 🎓" : `Semester ${n}`}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Regulation</label>
-                    <select value={reg} onChange={(e) => setReg(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md font-bold text-gray-700 bg-white">
-                      <option value="ALL">ALL REGULATIONS</option>
-                      <option value="2024">Regulation 2024</option>
-                      <option value="2021">Regulation 2021</option>
-                      <option value="2017">Regulation 2017</option>
-                    </select>
+                    <h2 className="text-lg font-bold text-amber-800 mb-1">Internal Marks Entry Moved</h2>
+                    <p className="text-sm text-amber-700">
+                      Internal marks are now entered directly by Faculty through the <strong>Faculty Portal → 📝 My Assigned Subjects &amp; Internal Marks</strong> tab.
+                      The Admin can configure subject assignments and assessment components under <strong>🏛️ Academic Management</strong>.
+                    </p>
+                    <p className="text-xs text-amber-600 mt-2">Historical internal-mark data in the database is preserved and unaffected.</p>
                   </div>
                 </div>
-                <div className="mb-6"><label className="block text-xs font-bold text-gray-500 uppercase mb-3">Select Paper Type</label><div className="flex gap-4"><button onClick={() => fetchSubjects("THEORY")} className="flex-1 py-2 rounded-lg border font-medium text-sm">📘 Theory</button><button onClick={() => fetchSubjects("PRACTICAL")} className="flex-1 py-2 rounded-lg border font-medium text-sm">🧪 Practical</button><button onClick={() => fetchSubjects("INTEGRATED")} className="flex-1 py-2 rounded-lg border font-medium text-sm">🔀 Integrated</button></div></div>
-                {paperType && (<motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-4 bg-slate-50 p-4 rounded-lg border border-slate-200"><div><label className="block text-xs font-bold text-gray-500 uppercase mb-2">Select Subject</label><select value={selectedSubject} onChange={(e) => setSelectedSubject(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md bg-white text-sm">{subjectList.map((s) => <option key={s.subjectCode} value={s.subjectCode}>{s.subjectCode} - {s.subjectName}</option>)}</select></div><div><label className="block text-xs font-bold text-gray-500 uppercase mb-2">Upload Internal Excel</label><input type="file" onChange={(e) => setInternalFile(e.target.files[0])} className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:bg-indigo-600 file:text-white" accept=".xlsx, .xls, .csv" /></div><button onClick={handleInternalUpload} disabled={loading} className="w-full py-2 rounded-lg font-bold text-white bg-indigo-600 hover:bg-indigo-700">🚀 Upload Internals</button></motion.div>)}
             </div>
             <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-100"><h2 className="text-lg font-bold mb-4 text-gray-800">Upload External Marks (Excel)</h2><p className="text-sm text-gray-500 mb-4">Upload the final university external marks sheet.</p><input type="file" onChange={handleExternalUpload} accept=".xlsx, .csv" className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:bg-teal-50 file:text-teal-700" /></div>
           </motion.div>
@@ -1872,7 +2191,7 @@ export default function AdminDashboard({ onLogout }) {
                   <div className="flex flex-col gap-1 flex-1 min-w-[160px]"><label className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Search</label><input type="text" value={pbSearch} onChange={e=>setPbSearch(e.target.value)} placeholder="Subject code, faculty, dept..." className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-700 bg-white outline-none focus:border-purple-400 w-full" /></div>
                   <div className="flex flex-col gap-1 items-end ml-auto"><label className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Results</label><span className="bg-purple-100 text-purple-700 font-bold text-sm px-3 py-2 rounded-lg">{savedPapers.filter(p=>{if(pbExamType!=="ALL"&&p.examType!==pbExamType)return false;if(pbDept!=="ALL"){const pD=String(p.department||"").toUpperCase().trim();const tD=pbDept.toUpperCase().trim();const extractCode=(s)=>s.replace(/^DEPARTMENT\s+OF\s+/i,"").trim();const pCode=extractCode(pD);const tCode=extractCode(tD);const matchD=pD===tD||pCode===tCode||pD.includes(tCode)||tD.includes(pCode);if(!matchD)return false;}if(pbSem!=="ALL"){const pS=String(p.semester||"").toLowerCase();const target=pbSem.toLowerCase();const targetWord=target.split(" ")[0];const semNumMap={"first":"1","second":"2","third":"3","fourth":"4","fifth":"5","sixth":"6","seventh":"7","eighth":"8"};const num=semNumMap[targetWord];const match=pS===target||pS.includes(targetWord)||(num&&(pS===num||pS.includes(`sem ${num}`)||pS.includes(`semester ${num}`)));if(!match)return false;}if(pbReg!=="ALL"){const paperText = (p.paperData || "") + (p.regulations || "");if(!paperText.includes(pbReg))return false;}if(pbUnit!=="ALL"&&pbExamType==="UNIT_TEST"&&(p.unit||"")!==pbUnit)return false;if(pbSearch){const s=pbSearch.toLowerCase();if(!(p.subjectCode||"").toLowerCase().includes(s)&&!(p.facultyName||"").toLowerCase().includes(s)&&!(p.department||"").toLowerCase().includes(s))return false;}return true;}).length} papers</span></div>
                 </div>
-                {savedPapers.filter(p=>{if(pbExamType!=="ALL"&&p.examType!==pbExamType)return false;if(pbDept!=="ALL"){const pD=String(p.department||"").toUpperCase().trim();const tD=pbDept.toUpperCase().trim();const extractCode=(s)=>s.replace(/^DEPARTMENT\s+OF\s+/i,"").trim();const pCode=extractCode(pD);const tCode=extractCode(tD);const matchD=pD===tD||pCode===tCode||pD.includes(tCode)||tD.includes(pCode);if(!matchD)return false;}if(pbSem!=="ALL"){const pS=String(p.semester||"").toLowerCase();const target=pbSem.toLowerCase();const targetWord=target.split(" ")[0];const semNumMap={"first":"1","second":"2","third":"3","fourth":"4","fifth":"5","sixth":"6","seventh":"7","eighth":"8"};const num=semNumMap[targetWord];const match=pS===target||pS.includes(targetWord)||(num&&(pS===num||pS.includes(`sem ${num}`)||pS.includes(`semester ${num}`)));if(!match)return false;}if(pbReg!=="ALL"){const paperText = (p.paperData || "") + (p.regulations || "");if(!paperText.includes(pbReg))return false;}if(pbUnit!=="ALL"&&pbExamType==="UNIT_TEST"&&(p.unit||"")!==pbUnit)return false;if(pbSearch){const s=pbSearch.toLowerCase();if(!(p.subjectCode||"").toLowerCase().includes(s)&&!(p.facultyName||"").toLowerCase().includes(s)&&!(p.department||"").toLowerCase().includes(s))return false;}return true;}).length===0 ? (<div className="text-center p-10 bg-white rounded-xl border border-dashed border-purple-300 text-purple-400 font-medium">{savedPapers.length===0?"No question papers have been generated by faculty yet.":"No papers match your filter."}</div>) : (<div className="overflow-x-auto bg-white rounded-xl border border-gray-200 shadow-sm"><table className="w-full text-sm text-left"><thead className="bg-purple-50 text-purple-800 uppercase text-xs font-bold border-b border-purple-100"><tr><th className="px-4 py-3">Subject</th><th className="px-4 py-3">Dept</th><th className="px-4 py-3">Sem</th><th className="px-4 py-3">Unit</th><th className="px-4 py-3">Session</th><th className="px-4 py-3">Type</th><th className="px-4 py-3">Faculty</th><th className="px-4 py-3 text-center">Actions</th></tr></thead><tbody className="divide-y divide-gray-100">{savedPapers.filter(p=>{if(pbExamType!=="ALL"&&p.examType!==pbExamType)return false;if(pbDept!=="ALL"){const pD=String(p.department||"").toUpperCase().trim();const tD=pbDept.toUpperCase().trim();const extractCode=(s)=>s.replace(/^DEPARTMENT\s+OF\s+/i,"").trim();const pCode=extractCode(pD);const tCode=extractCode(tD);const matchD=pD===tD||pCode===tCode||pD.includes(tCode)||tD.includes(pCode);if(!matchD)return false;}if(pbSem!=="ALL"){const pS=String(p.semester||"").toLowerCase();const target=pbSem.toLowerCase();const targetWord=target.split(" ")[0];const semNumMap={"first":"1","second":"2","third":"3","fourth":"4","fifth":"5","sixth":"6","seventh":"7","eighth":"8"};const num=semNumMap[targetWord];const match=pS===target||pS.includes(targetWord)||(num&&(pS===num||pS.includes(`sem ${num}`)||pS.includes(`semester ${num}`)));if(!match)return false;}if(pbReg!=="ALL"){const paperText = (p.paperData || "") + (p.regulations || "");if(!paperText.includes(pbReg))return false;}if(pbUnit!=="ALL"&&pbExamType==="UNIT_TEST"&&(p.unit||"")!==pbUnit)return false;if(pbSearch){const s=pbSearch.toLowerCase();if(!(p.subjectCode||"").toLowerCase().includes(s)&&!(p.facultyName||"").toLowerCase().includes(s)&&!(p.department||"").toLowerCase().includes(s))return false;}return true;}).map(paper=>(<tr key={paper.id} className="hover:bg-purple-50/40 transition-colors"><td className="px-4 py-3 font-bold text-gray-800">{paper.subjectCode}</td><td className="px-4 py-3"><span className="bg-gray-100 text-gray-700 px-2 py-0.5 rounded text-xs font-bold">{paper.department||"—"}</span></td><td className="px-4 py-3 text-gray-600 text-xs">{paper.semester||"—"}</td><td className="px-4 py-3 text-gray-600 text-xs">{paper.unit||"—"}</td><td className="px-4 py-3 text-gray-500 text-xs">{paper.examSession||"—"}</td><td className="px-4 py-3"><span className={`px-2 py-1 rounded text-[10px] font-bold ${paper.examType==="UNIT_TEST"?"bg-teal-100 text-teal-800":"bg-indigo-100 text-indigo-800"}`}>{paper.examType==="UNIT_TEST"?"UNIT TEST":"SEMESTER"}</span></td><td className="px-4 py-3 text-gray-700 font-medium">{paper.facultyName||"Unknown"}</td><td className="px-4 py-3"><div className="flex justify-center gap-2"><button onClick={()=>{if(paper.examType==="UNIT_TEST")exportUnitTestPaperDocx(JSON.parse(paper.paperData));else exportSemesterPaperDocx(JSON.parse(paper.paperData),paper.hasPartC?1:2);}} className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-1.5 px-3 rounded text-xs transition-colors">⬇ Download</button><button onClick={()=>handleDeletePaper(paper.id)} className="bg-red-50 text-red-600 hover:bg-red-100 font-bold py-1.5 px-3 rounded text-xs transition-colors">🗑 Delete</button></div></td></tr>))}</tbody></table></div>)}
+                {savedPapers.filter(p=>{if(pbExamType!=="ALL"&&p.examType!==pbExamType)return false;if(pbDept!=="ALL"){const pD=String(p.department||"").toUpperCase().trim();const tD=pbDept.toUpperCase().trim();const extractCode=(s)=>s.replace(/^DEPARTMENT\s+OF\s+/i,"").trim();const pCode=extractCode(pD);const tCode=extractCode(tD);const matchD=pD===tD||pCode===tCode||pD.includes(tCode)||tD.includes(pCode);if(!matchD)return false;}if(pbSem!=="ALL"){const pS=String(p.semester||"").toLowerCase();const target=pbSem.toLowerCase();const targetWord=target.split(" ")[0];const semNumMap={"first":"1","second":"2","third":"3","fourth":"4","fifth":"5","sixth":"6","seventh":"7","eighth":"8"};const num=semNumMap[targetWord];const match=pS===target||pS.includes(targetWord)||(num&&(pS===num||pS.includes(`sem ${num}`)||pS.includes(`semester ${num}`)));if(!match)return false;}if(pbReg!=="ALL"){const paperText = (p.paperData || "") + (p.regulations || "");if(!paperText.includes(pbReg))return false;}if(pbUnit!=="ALL"&&pbExamType==="UNIT_TEST"&&(p.unit||"")!==pbUnit)return false;if(pbSearch){const s=pbSearch.toLowerCase();let qCode = p.qpCode || "";if (!qCode) { try { const d = typeof p.paperData === "string" ? JSON.parse(p.paperData) : p.paperData; qCode = d?.unitHeader?.qpCode || d?.header?.qpCode || ""; } catch(e){} }if(!(p.subjectCode||"").toLowerCase().includes(s)&&!(p.facultyName||"").toLowerCase().includes(s)&&!(p.department||"").toLowerCase().includes(s)&&!qCode.toLowerCase().includes(s))return false;}return true;}).length===0 ? (<div className="text-center p-10 bg-white rounded-xl border border-dashed border-purple-300 text-purple-400 font-medium">{savedPapers.length===0?"No question papers have been generated by faculty yet.":"No papers match your filter."}</div>) : (<div className="overflow-x-auto bg-white rounded-xl border border-gray-200 shadow-sm"><table className="w-full text-sm text-left"><thead className="bg-purple-50 text-purple-800 uppercase text-xs font-bold border-b border-purple-100"><tr><th className="px-4 py-3">Subject</th><th className="px-4 py-3">Dept</th><th className="px-4 py-3">Sem</th><th className="px-4 py-3">Unit</th><th className="px-4 py-3">QP Code</th><th className="px-4 py-3">Type</th><th className="px-4 py-3">Faculty</th><th className="px-4 py-3 text-center">Actions</th></tr></thead><tbody className="divide-y divide-gray-100">{savedPapers.filter(p=>{if(pbExamType!=="ALL"&&p.examType!==pbExamType)return false;if(pbDept!=="ALL"){const pD=String(p.department||"").toUpperCase().trim();const tD=pbDept.toUpperCase().trim();const extractCode=(s)=>s.replace(/^DEPARTMENT\s+OF\s+/i,"").trim();const pCode=extractCode(pD);const tCode=extractCode(tD);const matchD=pD===tD||pCode===tCode||pD.includes(tCode)||tD.includes(pCode);if(!matchD)return false;}if(pbSem!=="ALL"){const pS=String(p.semester||"").toLowerCase();const target=pbSem.toLowerCase();const targetWord=target.split(" ")[0];const semNumMap={"first":"1","second":"2","third":"3","fourth":"4","fifth":"5","sixth":"6","seventh":"7","eighth":"8"};const num=semNumMap[targetWord];const match=pS===target||pS.includes(targetWord)||(num&&(pS===num||pS.includes(`sem ${num}`)||pS.includes(`semester ${num}`)));if(!match)return false;}if(pbReg!=="ALL"){const paperText = (p.paperData || "") + (p.regulations || "");if(!paperText.includes(pbReg))return false;}if(pbUnit!=="ALL"&&pbExamType==="UNIT_TEST"&&(p.unit||"")!==pbUnit)return false;if(pbSearch){const s=pbSearch.toLowerCase();let qCode = p.qpCode || "";if (!qCode) { try { const d = typeof p.paperData === "string" ? JSON.parse(p.paperData) : p.paperData; qCode = d?.unitHeader?.qpCode || d?.header?.qpCode || ""; } catch(e){} }if(!(p.subjectCode||"").toLowerCase().includes(s)&&!(p.facultyName||"").toLowerCase().includes(s)&&!(p.department||"").toLowerCase().includes(s)&&!qCode.toLowerCase().includes(s))return false;}return true;}).map(paper=>(<tr key={paper.id} className="hover:bg-purple-50/40 transition-colors"><td className="px-4 py-3 font-bold text-gray-800">{paper.subjectCode}</td><td className="px-4 py-3"><span className="bg-gray-100 text-gray-700 px-2 py-0.5 rounded text-xs font-bold">{paper.department||"—"}</span></td><td className="px-4 py-3 text-gray-600 text-xs">{paper.semester||"—"}</td><td className="px-4 py-3 text-gray-600 text-xs">{paper.unit||"—"}</td><td className="px-4 py-3 font-mono font-bold text-purple-900 text-xs">{(() => { if (paper.qpCode) return paper.qpCode; try { const d = typeof paper.paperData === "string" ? JSON.parse(paper.paperData) : paper.paperData; return d?.unitHeader?.qpCode || d?.header?.qpCode || "—"; } catch(e) { return "—"; } })()}</td><td className="px-4 py-3"><span className={`px-2 py-1 rounded text-[10px] font-bold ${paper.examType==="UNIT_TEST"?"bg-teal-100 text-teal-800":"bg-indigo-100 text-indigo-800"}`}>{paper.examType==="UNIT_TEST"?"UNIT TEST":"SEMESTER"}</span></td><td className="px-4 py-3 text-gray-700 font-medium">{paper.facultyName||"Unknown"}</td><td className="px-4 py-3"><div className="flex justify-center gap-2"><button onClick={()=>{if(paper.examType==="UNIT_TEST")exportUnitTestPaperDocx(JSON.parse(paper.paperData));else exportSemesterPaperDocx(JSON.parse(paper.paperData),paper.hasPartC?1:2);}} className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-1.5 px-3 rounded text-xs transition-colors">⬇ Download</button><button onClick={()=>handleDeletePaper(paper.id)} className="bg-red-50 text-red-600 hover:bg-red-100 font-bold py-1.5 px-3 rounded text-xs transition-colors">🗑 Delete</button></div></td></tr>))}</tbody></table></div>)}
               </div>
             )}
 
@@ -1981,6 +2300,626 @@ export default function AdminDashboard({ onLogout }) {
                      </div>
                   </div>
                </div>
+            )}
+
+          </motion.div>
+        )}
+
+        {activeTab === "arrear_manager" && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
+            
+            {/* Overview / Summary Stats */}
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex flex-col justify-between">
+                <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Total Arrear Records</span>
+                <span className="text-3xl font-black text-rose-600 mt-2">{arrearRecords.length}</span>
+              </div>
+              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex flex-col justify-between">
+                <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Valid Internals</span>
+                <span className="text-3xl font-black text-emerald-600 mt-2">
+                  {arrearRecords.filter(r => r.calculatedStatus === "VALID").length}
+                </span>
+              </div>
+              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex flex-col justify-between">
+                <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Expired Internals</span>
+                <span className="text-3xl font-black text-amber-600 mt-2">
+                  {arrearRecords.filter(r => r.calculatedStatus === "EXPIRED").length}
+                </span>
+              </div>
+              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex flex-col justify-between">
+                <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Admin Overridden</span>
+                <span className="text-3xl font-black text-indigo-600 mt-2">
+                  {arrearRecords.filter(r => r.isOverridden).length}
+                </span>
+              </div>
+            </div>
+
+            {/* Arrear Settings & Excel Upload Grid */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              
+              {/* Arrear Settings Card */}
+              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 lg:col-span-1">
+                <h3 className="text-md font-bold text-gray-700 mb-4">⚙️ Arrear Rules & Settings</h3>
+                <form onSubmit={handleUpdateArrearSettings} className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Internal Validity (Semesters)</label>
+                    <input 
+                      type="number"
+                      min="1"
+                      max="10"
+                      value={arrearSettings.internalValiditySemesters}
+                      onChange={e => setArrearSettings({ ...arrearSettings, internalValiditySemesters: parseInt(e.target.value) || 3 })}
+                      className="w-full p-2 border border-gray-300 rounded outline-none text-sm font-bold text-gray-700"
+                      required
+                    />
+                    <p className="text-[10px] text-gray-400 mt-1">Number of semesters an internal mark remains valid (default: 3).</p>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Expired Internal Theory Requirement (%)</label>
+                    <input 
+                      type="number"
+                      min="0"
+                      max="100"
+                      value={arrearSettings.expiredInternalTheoryPassPercentage}
+                      onChange={e => setArrearSettings({ ...arrearSettings, expiredInternalTheoryPassPercentage: parseFloat(e.target.value) || 50.0 })}
+                      className="w-full p-2 border border-gray-300 rounded outline-none text-sm font-bold text-gray-700"
+                      required
+                    />
+                    <p className="text-[10px] text-gray-400 mt-1">Passing percentage required in theory when internal is expired (default: 50%).</p>
+                  </div>
+                  <button 
+                    type="submit"
+                    className="w-full py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg shadow-sm text-sm transition-all"
+                  >
+                    Save Settings
+                  </button>
+                </form>
+              </div>
+
+              {/* Excel Upload Card */}
+              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 lg:col-span-2">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="text-md font-bold text-gray-700">📤 Import Arrear Internals</h3>
+                  <button 
+                    onClick={handleDownloadArrearTemplate}
+                    className="bg-gray-100 hover:bg-gray-200 border text-gray-700 font-bold py-1 px-3 rounded text-xs transition-colors"
+                  >
+                    📄 Download Template
+                  </button>
+                </div>
+                <div className="space-y-4">
+                  <p className="text-xs text-gray-500">
+                    Upload internal marks of arrear students. Required columns: <b>Roll No</b>, <b>Subject Code</b>, <b>Original Semester</b>, and <b>Internal Mark</b>.
+                  </p>
+                  <div className="border-2 border-dashed border-rose-200 hover:border-rose-400 rounded-xl p-6 text-center cursor-pointer transition-colors relative">
+                    <input 
+                      type="file" 
+                      accept=".xlsx, .xls"
+                      onChange={handleArrearExcelUpload}
+                      className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                    />
+                    <span className="text-3xl block mb-2">📊</span>
+                    <span className="text-sm font-bold text-rose-600 hover:underline">Select Arrears Excel File</span>
+                    <span className="text-xs text-gray-400 block mt-1">Only .xlsx or .xls files supported</span>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+
+            {/* Excel Validation Preview Area */}
+            {arrearPreviewData.length > 0 && (
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                <div className="p-4 border-b border-gray-100 bg-gray-50 flex justify-between items-center">
+                  <div>
+                    <h3 className="font-bold text-gray-800 text-sm">Preview Upload Data</h3>
+                    <p className="text-xs text-gray-500">Showing {arrearPreviewData.length} records parsed from spreadsheet.</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={() => {
+                        setArrearPreviewData([]);
+                        setArrearErrors([]);
+                        setArrearWarnings([]);
+                        setIsValidArrearUpload(false);
+                      }}
+                      className="bg-white border text-gray-600 font-bold py-1.5 px-4 rounded-lg text-xs"
+                    >
+                      Cancel
+                    </button>
+                    <button 
+                      onClick={handleConfirmArrearSave}
+                      disabled={!isValidArrearUpload}
+                      className="bg-rose-600 hover:bg-rose-700 text-white font-bold py-1.5 px-4 rounded-lg text-xs disabled:bg-gray-300"
+                    >
+                      Confirm & Save
+                    </button>
+                  </div>
+                </div>
+
+                {/* Errors/Warnings notifications */}
+                {(arrearErrors.length > 0 || arrearWarnings.length > 0) && (
+                  <div className="p-4 border-b border-gray-200 bg-amber-50/50 space-y-2">
+                    {arrearErrors.map((err, i) => (
+                      <div key={`err-${i}`} className="text-xs font-bold text-red-600 flex items-center gap-1">❌ {err}</div>
+                    ))}
+                    {arrearWarnings.map((warn, i) => (
+                      <div key={`warn-${i}`} className="text-xs font-bold text-amber-600 flex items-center gap-1">⚠️ {warn}</div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="max-h-[300px] overflow-y-auto">
+                  <table className="w-full text-sm text-left">
+                    <thead className="bg-gray-100 text-gray-600 text-xs font-bold sticky top-0 z-10">
+                      <tr>
+                        <th className="px-4 py-2">Roll No</th>
+                        <th className="px-4 py-2">Student Name</th>
+                        <th className="px-4 py-2">Subject Code</th>
+                        <th className="px-4 py-2">Subject Name</th>
+                        <th className="px-4 py-2 text-center">Orig Sem</th>
+                        <th className="px-4 py-2 text-center">Curr Sem</th>
+                        <th className="px-4 py-2 text-center">Internal Mark</th>
+                        <th className="px-4 py-2">Paper Type</th>
+                        <th className="px-4 py-2">Regulation</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 text-xs">
+                      {arrearPreviewData.map((row, i) => (
+                        <tr key={i} className="hover:bg-gray-50">
+                          <td className="px-4 py-2 font-mono font-bold text-gray-800">{row.rollNo}</td>
+                          <td className="px-4 py-2 text-gray-600 font-semibold">{row.studentName}</td>
+                          <td className="px-4 py-2 font-mono font-bold text-indigo-600">{row.subjectCode}</td>
+                          <td className="px-4 py-2 text-gray-700">{row.subjectName}</td>
+                          <td className="px-4 py-2 text-center">Sem {row.originalSemester}</td>
+                          <td className="px-4 py-2 text-center">Sem {row.currentSemester}</td>
+                          <td className="px-4 py-2 text-center font-extrabold text-amber-700">{row.internalMark}</td>
+                          <td className="px-4 py-2 text-gray-500">{row.paperType}</td>
+                          <td className="px-4 py-2 text-gray-500">R-{row.regulation}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Main Interactive Workspace */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+              <div className="p-4 border-b border-gray-100 bg-gray-50 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                {/* Mode Selector */}
+                <div className="flex bg-gray-100 p-1 rounded-lg shrink-0">
+                  <button 
+                    onClick={() => setArrearActiveSubView("dashboard")} 
+                    className={`px-4 py-1.5 text-xs font-bold rounded-md transition-all ${arrearActiveSubView === "dashboard" ? "bg-white text-rose-600 shadow-sm" : "text-gray-500"}`}
+                  >
+                    🚨 General List
+                  </button>
+                  <button 
+                    onClick={() => {
+                      setArrearActiveSubView("student");
+                      if (arrearRecords.length > 0 && !selectedStudentForView) {
+                        setSelectedStudentForView(arrearRecords[0].registerNumber);
+                      }
+                    }} 
+                    className={`px-4 py-1.5 text-xs font-bold rounded-md transition-all ${arrearActiveSubView === "student" ? "bg-white text-rose-600 shadow-sm" : "text-gray-500"}`}
+                  >
+                    👤 Student View
+                  </button>
+                  <button 
+                    onClick={() => {
+                      setArrearActiveSubView("subject");
+                      if (arrearRecords.length > 0 && !selectedSubjectForView) {
+                        setSelectedSubjectForView(arrearRecords[0].subjectCode);
+                      }
+                    }} 
+                    className={`px-4 py-1.5 text-xs font-bold rounded-md transition-all ${arrearActiveSubView === "subject" ? "bg-white text-rose-600 shadow-sm" : "text-gray-500"}`}
+                  >
+                    📚 Subject View
+                  </button>
+                </div>
+
+                {/* Filters (only visible in dashboard/general list mode) */}
+                {arrearActiveSubView === "dashboard" && (
+                  <div className="flex flex-wrap gap-2 w-full md:w-auto items-center justify-end">
+                    <select 
+                      value={arrearSearchDept} 
+                      onChange={e => setArrearSearchDept(e.target.value)} 
+                      className="p-2 border border-gray-300 rounded outline-none text-xs font-bold text-gray-600 bg-white"
+                    >
+                      <option value="ALL">All Depts</option>
+                      {DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}
+                    </select>
+                    <select 
+                      value={arrearSearchStatus} 
+                      onChange={e => setArrearSearchStatus(e.target.value)} 
+                      className="p-2 border border-gray-300 rounded outline-none text-xs font-bold text-gray-600 bg-white"
+                    >
+                      <option value="">All Statuses</option>
+                      <option value="VALID">VALID</option>
+                      <option value="EXPIRED">EXPIRED</option>
+                      <option value="OVERRIDDEN">OVERRIDDEN</option>
+                    </select>
+                    <input 
+                      type="text" 
+                      placeholder="Search Roll No..." 
+                      value={arrearSearchRollNo}
+                      onChange={e => setArrearSearchRollNo(e.target.value)}
+                      className="p-2 border border-gray-300 rounded outline-none text-xs w-36"
+                    />
+                    <input 
+                      type="text" 
+                      placeholder="Subject Code..." 
+                      value={arrearSearchSubject}
+                      onChange={e => setArrearSearchSubject(e.target.value)}
+                      className="p-2 border border-gray-300 rounded outline-none text-xs w-36"
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* View 1: General List Dashboard */}
+              {arrearActiveSubView === "dashboard" && (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm text-left">
+                    <thead className="bg-gray-100 text-gray-600 uppercase text-xs font-bold border-b border-gray-200">
+                      <tr>
+                        <th className="px-6 py-3">Roll No</th>
+                        <th className="px-6 py-3">Student Name</th>
+                        <th className="px-6 py-3 text-center">Dept</th>
+                        <th className="px-6 py-3">Subject</th>
+                        <th className="px-6 py-3 text-center">Original Sem</th>
+                        <th className="px-6 py-3 text-center">Internal Mark</th>
+                        <th className="px-6 py-3 text-center">Current Sem</th>
+                        <th className="px-6 py-3 text-center">Status</th>
+                        <th className="px-6 py-3 text-center">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {arrearRecords.length === 0 ? (
+                        <tr>
+                          <td colSpan="9" className="p-8 text-center text-gray-400 font-semibold">
+                            No arrear records matching selected filters found.
+                          </td>
+                        </tr>
+                      ) : (
+                        arrearRecords.map((rec, i) => (
+                          <tr key={i} className="hover:bg-gray-50/50">
+                            <td className="px-6 py-4 font-mono font-bold text-gray-800">{rec.registerNumber}</td>
+                            <td className="px-6 py-4 text-gray-700 font-semibold">{rec.studentName}</td>
+                            <td className="px-6 py-4 text-center"><span className="bg-gray-100 text-gray-700 px-2 py-0.5 rounded text-xs font-bold">{rec.department}</span></td>
+                            <td className="px-6 py-4">
+                              <div className="font-mono font-bold text-indigo-600 text-xs">{rec.subjectCode}</div>
+                              <div className="text-xs text-gray-500 truncate max-w-[200px]">{rec.subjectName}</div>
+                            </td>
+                            <td className="px-6 py-4 text-center font-medium">Sem {rec.originalSemester}</td>
+                            <td className="px-6 py-4 text-center font-extrabold text-amber-700">{rec.internalMark}</td>
+                            <td className="px-6 py-4 text-center font-medium">Sem {rec.currentSemester}</td>
+                            <td className="px-6 py-4 text-center">
+                              <span className={`px-3 py-1 rounded-full text-xs font-bold shadow-sm ${
+                                rec.calculatedStatus === "VALID" 
+                                  ? "bg-emerald-50 text-emerald-700 border border-emerald-200" 
+                                  : "bg-red-50 text-red-700 border border-red-200"
+                              }`}>
+                                {rec.calculatedStatus}
+                              </span>
+                              {rec.isOverridden && (
+                                <span className="block text-[8px] font-bold text-indigo-500 mt-1 uppercase tracking-wider">
+                                  Overridden
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-6 py-4 text-center">
+                              <div className="flex justify-center gap-2">
+                                <button 
+                                  onClick={() => {
+                                    setSelectedRecordForOverride(rec);
+                                    setOverrideStatus(rec.calculatedStatus);
+                                    setOverrideReason(rec.overrideDetails?.reason || "");
+                                    setOverrideExpiry(rec.overrideDetails?.overrideExpirySem || "");
+                                  }}
+                                  className="bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold py-1 px-3.5 rounded text-xs transition-colors"
+                                >
+                                  Override
+                                </button>
+                                {rec.isOverridden && (
+                                  <button 
+                                    onClick={() => handleRemoveOverride(rec)}
+                                    className="bg-red-50 hover:bg-red-100 text-red-600 font-bold py-1 px-2 rounded text-xs transition-colors"
+                                    title="Remove Override"
+                                  >
+                                    Reset
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {/* View 2: Student-wise view */}
+              {arrearActiveSubView === "student" && (
+                <div className="p-6 space-y-6">
+                  <div className="flex gap-4 items-center border-b pb-4 mb-4">
+                    <label className="font-bold text-gray-700 text-sm">Select Student:</label>
+                    <select 
+                      value={selectedStudentForView} 
+                      onChange={e => setSelectedStudentForView(e.target.value)}
+                      className="p-2 border border-gray-300 rounded outline-none font-mono text-sm font-bold text-gray-700 bg-white min-w-[200px]"
+                    >
+                      <option value="">-- Choose Student --</option>
+                      {Array.from(new Set(arrearRecords.map(r => r.registerNumber))).map(regNo => {
+                        const rec = arrearRecords.find(r => r.registerNumber === regNo);
+                        return <option key={regNo} value={regNo}>{`${regNo} - ${rec?.studentName || ""}`}</option>;
+                      })}
+                    </select>
+                  </div>
+
+                  {selectedStudentForView ? (
+                    <div className="space-y-4">
+                      {(() => {
+                        const studentRecs = arrearRecords.filter(r => r.registerNumber === selectedStudentForView);
+                        if (studentRecs.length === 0) return <p className="text-gray-400 font-medium">No arrear records for this student.</p>;
+                        
+                        return (
+                          <>
+                            <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 flex justify-between items-center">
+                              <div>
+                                <h4 className="font-bold text-slate-800 text-base">{studentRecs[0].studentName}</h4>
+                                <p className="text-xs font-mono text-slate-500 font-bold mt-1">{studentRecs[0].registerNumber} &nbsp;·&nbsp; {studentRecs[0].department}</p>
+                              </div>
+                              <span className="bg-rose-100 text-rose-800 px-3 py-1 rounded-full text-xs font-black shadow-sm">
+                                {studentRecs.length} Arrear Subject(s)
+                              </span>
+                            </div>
+
+                            <div className="overflow-x-auto rounded-lg border border-gray-200">
+                              <table className="w-full text-sm text-left">
+                                <thead className="bg-gray-50 text-gray-600 uppercase text-xs font-bold border-b border-gray-200">
+                                  <tr>
+                                    <th className="px-4 py-2.5">Subject Code</th>
+                                    <th className="px-4 py-2.5">Subject Name</th>
+                                    <th className="px-4 py-2.5 text-center">Original Sem</th>
+                                    <th className="px-4 py-2.5 text-center">Current Sem</th>
+                                    <th className="px-4 py-2.5 text-center">Internal Mark</th>
+                                    <th className="px-4 py-2.5 text-center">Status</th>
+                                    <th className="px-4 py-2.5 text-center">Actions</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-100">
+                                  {studentRecs.map((rec, i) => (
+                                    <tr key={i} className="hover:bg-gray-50/40">
+                                      <td className="px-4 py-3 font-mono font-bold text-indigo-600 text-xs">{rec.subjectCode}</td>
+                                      <td className="px-4 py-3 text-gray-700 font-medium">{rec.subjectName}</td>
+                                      <td className="px-4 py-3 text-center">Sem {rec.originalSemester}</td>
+                                      <td className="px-4 py-3 text-center">Sem {rec.currentSemester}</td>
+                                      <td className="px-4 py-3 text-center font-extrabold text-amber-700">{rec.internalMark}</td>
+                                      <td className="px-4 py-3 text-center">
+                                        <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${
+                                          rec.calculatedStatus === "VALID" 
+                                            ? "bg-emerald-50 text-emerald-700 border border-emerald-200" 
+                                            : "bg-red-50 text-red-700 border border-red-200"
+                                        }`}>
+                                          {rec.calculatedStatus}
+                                        </span>
+                                      </td>
+                                      <td className="px-4 py-3 text-center">
+                                        <button 
+                                          onClick={() => {
+                                            setSelectedRecordForOverride(rec);
+                                            setOverrideStatus(rec.calculatedStatus);
+                                            setOverrideReason(rec.overrideDetails?.reason || "");
+                                            setOverrideExpiry(rec.overrideDetails?.overrideExpirySem || "");
+                                          }}
+                                          className="bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold py-1 px-3 rounded text-xs transition-colors"
+                                        >
+                                          Override
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </>
+                        );
+                      })()}
+                    </div>
+                  ) : (
+                    <p className="text-center text-gray-400 p-8">Please choose a student from the dropdown list to see individual details.</p>
+                  )}
+                </div>
+              )}
+
+              {/* View 3: Subject-wise view */}
+              {arrearActiveSubView === "subject" && (
+                <div className="p-6 space-y-6">
+                  <div className="flex gap-4 items-center border-b pb-4 mb-4">
+                    <label className="font-bold text-gray-700 text-sm">Select Subject:</label>
+                    <select 
+                      value={selectedSubjectForView} 
+                      onChange={e => setSelectedSubjectForView(e.target.value)}
+                      className="p-2 border border-gray-300 rounded outline-none font-mono text-sm font-bold text-gray-700 bg-white min-w-[200px]"
+                    >
+                      <option value="">-- Choose Subject --</option>
+                      {Array.from(new Set(arrearRecords.map(r => r.subjectCode))).map(subCode => {
+                        const rec = arrearRecords.find(r => r.subjectCode === subCode);
+                        return <option key={subCode} value={subCode}>{`${subCode} - ${rec?.subjectName || ""}`}</option>;
+                      })}
+                    </select>
+                  </div>
+
+                  {selectedSubjectForView ? (
+                    <div className="space-y-4">
+                      {(() => {
+                        const subjectRecs = arrearRecords.filter(r => r.subjectCode === selectedSubjectForView);
+                        if (subjectRecs.length === 0) return <p className="text-gray-400 font-medium">No arrear records for this subject.</p>;
+                        
+                        return (
+                          <>
+                            <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 flex justify-between items-center">
+                              <div>
+                                <h4 className="font-bold text-slate-800 text-base">{subjectRecs[0].subjectName}</h4>
+                                <p className="text-xs font-mono text-slate-500 font-bold mt-1">{subjectRecs[0].subjectCode} &nbsp;·&nbsp; Credits: {subjectRecs[0].credits} &nbsp;·&nbsp; Type: {subjectRecs[0].paperType}</p>
+                              </div>
+                              <span className="bg-purple-100 text-purple-800 px-3 py-1 rounded-full text-xs font-black shadow-sm">
+                                {subjectRecs.length} Student(s) with Arrear
+                              </span>
+                            </div>
+
+                            <div className="overflow-x-auto rounded-lg border border-gray-200">
+                              <table className="w-full text-sm text-left">
+                                <thead className="bg-gray-50 text-gray-600 uppercase text-xs font-bold border-b border-gray-200">
+                                  <tr>
+                                    <th className="px-4 py-2.5">Roll No</th>
+                                    <th className="px-4 py-2.5">Student Name</th>
+                                    <th className="px-4 py-2.5 text-center">Original Sem</th>
+                                    <th className="px-4 py-2.5 text-center">Current Sem</th>
+                                    <th className="px-4 py-2.5 text-center">Internal Mark</th>
+                                    <th className="px-4 py-2.5 text-center">Status</th>
+                                    <th className="px-4 py-2.5 text-center">Actions</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-100">
+                                  {subjectRecs.map((rec, i) => (
+                                    <tr key={i} className="hover:bg-gray-50/40">
+                                      <td className="px-4 py-3 font-mono font-bold text-gray-800 text-xs">{rec.registerNumber}</td>
+                                      <td className="px-4 py-3 text-gray-700 font-semibold">{rec.studentName}</td>
+                                      <td className="px-4 py-3 text-center">Sem {rec.originalSemester}</td>
+                                      <td className="px-4 py-3 text-center">Sem {rec.currentSemester}</td>
+                                      <td className="px-4 py-3 text-center font-extrabold text-amber-700">{rec.internalMark}</td>
+                                      <td className="px-4 py-3 text-center">
+                                        <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${
+                                          rec.calculatedStatus === "VALID" 
+                                            ? "bg-emerald-50 text-emerald-700 border border-emerald-200" 
+                                            : "bg-red-50 text-red-700 border border-red-200"
+                                        }`}>
+                                          {rec.calculatedStatus}
+                                        </span>
+                                      </td>
+                                      <td className="px-4 py-3 text-center">
+                                        <button 
+                                          onClick={() => {
+                                            setSelectedRecordForOverride(rec);
+                                            setOverrideStatus(rec.calculatedStatus);
+                                            setOverrideReason(rec.overrideDetails?.reason || "");
+                                            setOverrideExpiry(rec.overrideDetails?.overrideExpirySem || "");
+                                          }}
+                                          className="bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold py-1 px-3 rounded text-xs transition-colors"
+                                        >
+                                          Override
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </>
+                        );
+                      })()}
+                    </div>
+                  ) : (
+                    <p className="text-center text-gray-400 p-8">Please choose a subject from the dropdown list to see registered student details.</p>
+                  )}
+                </div>
+              )}
+
+            </div>
+
+            {/* Override Modal */}
+            {selectedRecordForOverride && (
+              <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+                <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-y-auto p-6 relative">
+                  <button 
+                    onClick={() => setSelectedRecordForOverride(null)} 
+                    className="absolute top-4 right-4 text-gray-400 hover:text-gray-800 font-bold text-xl"
+                  >
+                    ✕
+                  </button>
+                  <h2 className="text-lg font-bold text-indigo-800 mb-4 border-b pb-2">Apply Validity Status Override</h2>
+                  
+                  <div className="space-y-4 text-sm">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <p className="text-xs font-bold text-gray-400 uppercase">Student Name</p>
+                        <p className="font-semibold text-gray-800">{selectedRecordForOverride.studentName}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-bold text-gray-400 uppercase">Roll No</p>
+                        <p className="font-mono font-bold text-gray-800">{selectedRecordForOverride.registerNumber}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-bold text-gray-400 uppercase">Subject</p>
+                        <p className="font-bold text-indigo-700">{selectedRecordForOverride.subjectCode}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-bold text-gray-400 uppercase">Internal Mark</p>
+                        <p className="font-black text-amber-700">{selectedRecordForOverride.internalMark}</p>
+                      </div>
+                    </div>
+
+                    <form onSubmit={handleSaveOverride} className="space-y-4 pt-4 border-t border-gray-100">
+                      <div>
+                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Target Override Status</label>
+                        <select 
+                          value={overrideStatus} 
+                          onChange={e => setOverrideStatus(e.target.value)}
+                          className="w-full p-2 border border-gray-300 rounded outline-none font-bold text-gray-700 bg-white text-sm"
+                        >
+                          <option value="VALID">VALID (Force internal mark use)</option>
+                          <option value="EXPIRED">EXPIRED (Force expired theory requirements)</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Reason for Override *</label>
+                        <textarea 
+                          value={overrideReason}
+                          onChange={e => setOverrideReason(e.target.value)}
+                          placeholder="e.g. Exceptional medical exemption granted by COE"
+                          className="w-full p-2 border border-gray-300 rounded outline-none text-xs h-20"
+                          required
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Override Expiry Semester (Optional)</label>
+                        <input 
+                          type="number"
+                          min="1"
+                          max="8"
+                          value={overrideExpiry}
+                          onChange={e => setOverrideExpiry(e.target.value)}
+                          placeholder="e.g. 6"
+                          className="w-full p-2 border border-gray-300 rounded outline-none text-xs"
+                        />
+                        <p className="text-[10px] text-gray-400 mt-1">If blank, the override will apply indefinitely.</p>
+                      </div>
+
+                      <div className="flex gap-2 justify-end pt-2">
+                        <button 
+                          type="button"
+                          onClick={() => setSelectedRecordForOverride(null)}
+                          className="bg-white border text-gray-600 font-bold py-2 px-4 rounded-lg text-xs"
+                        >
+                          Cancel
+                        </button>
+                        <button 
+                          type="submit"
+                          className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-5 rounded-lg text-xs shadow-sm"
+                        >
+                          Apply Override
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                </div>
+              </div>
             )}
 
           </motion.div>

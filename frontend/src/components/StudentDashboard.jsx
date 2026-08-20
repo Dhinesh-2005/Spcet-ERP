@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { API_BASE, mergeResults } from "../utils";
 import GPACalculator from "../components/GPACalculator";
+import StudentAcademicHistory from "./StudentAcademicHistory";
 
 // Grade → grade-point mapping (Anna University scale)
 const GRADE_POINTS = { O: 10, "A+": 9, A: 8, "B+": 7, B: 6, C: 5, U: 0, RA: 0, AB: 0, SA: 0, W: 0 };
@@ -27,6 +28,7 @@ export default function StudentDashboard({ user, onLogout }) {
   const [regularCodes, setRegularCodes] = useState(new Set()); // regular subject codes only
   const [photoUrl, setPhotoUrl] = useState(null);
   const [photoError, setPhotoError] = useState(false);
+  const [activeTab, setActiveTab] = useState("results"); // "results" | "academic"
 
   useEffect(() => {
     async function load() {
@@ -106,16 +108,42 @@ export default function StudentDashboard({ user, onLogout }) {
               <p className="text-green-600 font-medium text-sm">Student Result Portal</p>
             </div>
           </div>
-          <button onClick={() => setShowCalculator(!showCalculator)} className="hidden md:flex px-4 py-2 bg-indigo-50 text-indigo-700 rounded-lg font-bold border border-indigo-200 hover:bg-indigo-100 transition-colors print:hidden">
-            {showCalculator ? "Hide Calculator" : "🧮 Open GPA Calculator"}
+          <div className="flex items-center gap-3 print:hidden">
+            <button onClick={() => setShowCalculator(!showCalculator)} className="hidden md:flex px-4 py-2 bg-indigo-50 text-indigo-700 rounded-lg font-bold border border-indigo-200 hover:bg-indigo-100 transition-colors">
+              {showCalculator ? "Hide Calculator" : "🧮 Open GPA Calculator"}
+            </button>
+          </div>
+        </div>
+
+        {/* Tab Bar */}
+        <div className="flex border-b border-gray-200 mb-6 gap-2 print:hidden">
+          <button
+            onClick={() => setActiveTab("results")}
+            className={`pb-2.5 px-5 font-bold text-sm transition-all border-b-2 ${
+              activeTab === "results" ? "border-green-600 text-green-700" : "border-transparent text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            📋 My Results
+          </button>
+          <button
+            onClick={() => setActiveTab("academic")}
+            className={`pb-2.5 px-5 font-bold text-sm transition-all border-b-2 ${
+              activeTab === "academic" ? "border-green-600 text-green-700" : "border-transparent text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            🎓 Academic History & CGPA
           </button>
         </div>
 
-        {showCalculator && (
-          <div className="mb-8 print:hidden">
-            <GPACalculator />
-          </div>
-        )}
+        {activeTab === "academic" && <StudentAcademicHistory registerNumber={user?.registerNumber} />}
+
+        {activeTab === "results" && (
+          <>
+          {showCalculator && (
+            <div className="mb-8 print:hidden">
+              <GPACalculator />
+            </div>
+          )}
 
         {/* Profile Details Box */}
         <div className="bg-[#b3e6e6] border border-teal-200 rounded-lg p-6 mb-8 print:bg-white print:border-none print:p-0 print:mb-4">
@@ -248,14 +276,16 @@ export default function StudentDashboard({ user, onLogout }) {
           </div>
         )}
 
-        <div className="mt-8 flex justify-end gap-4 print:hidden">
-          <button onClick={() => window.print()} className="px-6 py-2.5 rounded-lg bg-green-600 hover:bg-green-700 text-white font-bold transition-all shadow-md active:scale-95 flex items-center gap-2">
-            <span>📄</span> Download PDF
-          </button>
-          <button onClick={onLogout} className="px-6 py-2.5 rounded-lg bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 font-bold transition-all shadow-sm active:scale-95">
-            Logout
-          </button>
-        </div>
+          <div className="mt-8 flex justify-end gap-4 print:hidden">
+            <button onClick={() => window.print()} className="px-6 py-2.5 rounded-lg bg-green-600 hover:bg-green-700 text-white font-bold transition-all shadow-md active:scale-95 flex items-center gap-2">
+              <span>📄</span> Download PDF
+            </button>
+            <button onClick={onLogout} className="px-6 py-2.5 rounded-lg bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 font-bold transition-all shadow-sm active:scale-95">
+              Logout
+            </button>
+          </div>
+          </>
+        )}
       </div>
     </div>
   );

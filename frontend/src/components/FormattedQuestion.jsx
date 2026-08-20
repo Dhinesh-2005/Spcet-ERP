@@ -25,8 +25,8 @@ function parseMixedTextAndLatex(textStr) {
     return segments;
   }
 
-  // 2. If no $ delimiters, look for LaTeX commands like \frac, \sqrt, \sum, \int, \iint, \iiint, \prod, \lim, \infty, \partial, \pm, \approx, \ne, \le, \ge, \pi, \alpha, \beta, \theta, \lambda, \sigma, \cdot, \sin, \cos, \tan, \cot, \sec, \csc, \log, \ln, \left, \right
-  const latexCommandRegex = /\\(?:frac|sqrt|sum|int|iint|iiint|prod|lim|infty|sin|cos|tan|cot|sec|csc|log|ln|left|right|partial|pm|approx|ne|le|ge|pi|alpha|beta|theta|lambda|sigma|cdot|to)\b/i;
+  // 2. If no $ delimiters, look for LaTeX commands like \frac, \sqrt, \sum, \int, \iint, \iiint, \prod, \lim, \infty, \partial, \pm, \approx, \ne, \le, \ge, \pi, \alpha, \beta, \theta, \lambda, \sigma, \cdot, \sin, \cos, \tan, \cot, \sec, \csc, \cosh, \sinh, \tanh, \coth, \sech, \csch, \exp, \log, \ln, \left, \right
+  const latexCommandRegex = /\\(?:frac|sqrt|vec|sum|prod|int|oint|iint|iiint|idotsint|lim|infty|cosh|sinh|tanh|coth|sech|csch|exp|sin|cos|tan|cot|sec|csc|log|lg|ln|max|min|sup|inf|left|right|partial|pm|approx|ne|le|ge|leq|geq|pi|alpha|beta|theta|lambda|sigma|cdot|to|rightarrow|leftarrow|rightleftharpoons|xrightarrow|longrightarrow|longleftarrow|longleftrightarrow|begin|pmatrix|bmatrix|vmatrix|cases)\b/i;
 
   if (!latexCommandRegex.test(text)) {
     // Check for inline math exponents like x^2, a^2+b^2=c^2
@@ -38,7 +38,7 @@ function parseMixedTextAndLatex(textStr) {
 
   // Regex to capture LaTeX expressions (commands + arguments/brackets)
   // e.g. \frac{a}{b}, \sqrt{x}, \sum_{i=1}^n, \int_a^b f(x)dx, \frac{d^2y}{dx^2}
-  const mathExprRegex = /(?:\\(?:frac|sqrt)(?:\[[^\]]*\])?\{[^{}]*\}\{[^{}]*\}|\\(?:frac|sqrt)(?:\[[^\]]*\])?\{[^{}]*\}|\\(?:sum|int|iint|iiint|prod|lim)(?:_\{[^{}]*\}|_\S+)?(?:\^\{[^{}]*\}|\^\S+)?|\\(?:partial|pm|approx|ne|le|ge|pi|alpha|beta|theta|lambda|sigma|cdot|to|infty|sin|cos|tan|cot|sec|csc|log|ln)\b(?:\^[0-9\{\}\-]+)?(?:\_[0-9\{\}\-]+)?)+/gi;
+  const mathExprRegex = /(?:\\(?:frac|sqrt|vec)(?:\[[^\]]*\])?\{[^{}]*\}\{[^{}]*\}|\\(?:frac|sqrt|vec)(?:\[[^\]]*\])?\{[^{}]*\}|\\xrightarrow\{[^{}]*\}|\\(?:sum|int|iint|iiint|prod|lim)(?:_\{[^{}]*\}|_\S+)?(?:\^\{[^{}]*\}|\^\S+)?|\\(?:partial|pm|approx|ne|le|ge|leq|geq|pi|alpha|beta|theta|lambda|sigma|cdot|to|infty|cosh|sinh|tanh|coth|sech|csch|exp|sin|cos|tan|cot|sec|csc|log|ln|rightarrow|leftarrow|longrightarrow|longleftrightarrow|rightleftharpoons)\b(?:\^[0-9\{\}\-]+)?(?:\_[0-9\{\}\-]+)?)+/gi;
 
   const segments = [];
   let lastIndex = 0;
@@ -95,13 +95,13 @@ export default function FormattedQuestion({ question = "", equation = "", classN
   }, [question, equation]);
 
   return (
-    <span className={`formatted-question inline-flex flex-wrap items-baseline gap-1.5 ${className}`}>
+    <span className={`formatted-question inline-flex flex-wrap items-baseline gap-1 ${className}`}>
       {renderedElements.map((el, idx) => {
         if (el.type === 'katexHtml') {
           return (
             <span
               key={idx}
-              className="inline-block bg-teal-50/70 px-1.5 py-0.5 rounded border border-teal-200 text-teal-950 font-mono text-sm leading-normal align-middle shadow-2xs"
+              className="inline-block text-gray-900 leading-normal align-baseline px-0.5"
               dangerouslySetInnerHTML={{ __html: el.html }}
             />
           );

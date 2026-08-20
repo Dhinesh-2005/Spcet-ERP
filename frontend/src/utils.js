@@ -1,5 +1,11 @@
-import * as XLSX from "xlsx";
-import { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, AlignmentType, BorderStyle, Footer, PageNumber, ImageRun } from "docx";
+import {
+  Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
+  WidthType, AlignmentType, BorderStyle, Footer, PageNumber, ImageRun,
+  Math as DocxMath, MathRun, MathFraction, MathIntegral, MathSum,
+  MathRadical, MathSubScript, MathSuperScript, MathSubSuperScript,
+  MathLimitLower, MathLimitUpper, MathFunction, BuilderElement, XmlComponent, createMathBase, createMathAccentCharacter,
+  createMathNAryProperties, createMathSubScriptElement, createMathSuperScriptElement
+} from "docx";
 import { saveAs } from "file-saver";
 
 export const API_BASE = import.meta.env.VITE_API_BASE || (import.meta.env.PROD ? "" : "http://localhost:8000");
@@ -260,69 +266,531 @@ export const splitQuestionSubdivisions = (rawText) => {
   return [text];
 };
 
-export const parseQuestionTextRuns = (rawText, baseBold = false) => {
-  if (!rawText) return [new TextRun({ text: "", bold: baseBold })];
-  let text = String(rawText).trim();
+class MathUprightRun extends BuilderElement {
+  constructor(text) {
+    super({
+      name: "m:r",
+      children: [
+        new BuilderElement({
+          name: "m:rPr",
+          children: [
+            new BuilderElement({
+              name: "m:sty",
+              attributes: { val: { key: "m:val", value: "p" } }
+            })
+          ]
+        }),
+        new BuilderElement({
+          name: "m:t",
+          children: [text]
+        })
+      ]
+    });
+  }
+}
 
-  // 1. If text is strictly a CO label (CO1-CO6) or K-Level (K1-K6) column cell, keep as plain text!
-  if (/^(?:CO[1-6]|K[1-6])$/i.test(text)) {
-    return [new TextRun({ text, bold: baseBold })];
+class MathAccent extends XmlComponent {
+  constructor(options) {
+    super("m:acc");
+    const accPr = new XmlComponent("m:accPr");
+    accPr.root.push(createMathAccentCharacter({ accent: options.accent || "⃗" }));
+    this.root.push(accPr);
+    this.root.push(createMathBase({ children: options.children }));
+  }
+}
+
+class MathIntegralCustom extends XmlComponent {
+  constructor(options) {
+    super("m:nary");
+    this.root.push(
+      createMathNAryProperties({
+        accent: options.accent || "∫",
+        hasSuperScript: !!options.superScript,
+        hasSubScript: !!options.subScript,
+        limitLocationVal: "subSup"
+      })
+    );
+    if (!!options.subScript) {
+      this.root.push(createMathSubScriptElement({ children: options.subScript }));
+    }
+    if (!!options.superScript) {
+      this.root.push(createMathSuperScriptElement({ children: options.superScript }));
+    }
+    this.root.push(createMathBase({ children: options.children && options.children.length > 0 ? options.children : [new MathRun("")] }));
+  }
+}
+
+class MathMatrix extends BuilderElement {
+  constructor({ open = "[", close = "]", rows }) {
+    const rowElements = rows.map(row => new BuilderElement({
+      name: "m:mr",
+      children: row.map(cell => new BuilderElement({
+        name: "m:e",
+        children: Array.isArray(cell) ? cell : [cell]
+      }))
+    }));
+
+    const matrixElem = new BuilderElement({
+      name: "m:m",
+      children: rowElements
+    });
+
+    super({
+      name: "m:d",
+      children: [
+        new BuilderElement({
+          name: "m:dPr",
+          children: [
+            new BuilderElement({ name: "m:begChr", attributes: { val: { key: "m:val", value: open } } }),
+            new BuilderElement({ name: "m:endChr", attributes: { val: { key: "m:val", value: close } } })
+          ]
+        }),
+        new BuilderElement({
+          name: "m:e",
+          children: [matrixElem]
+        })
+      ]
+    });
+  }
+}
+
+class MathCases extends BuilderElement {
+  constructor({ rows }) {
+    const rowElements = rows.map(rowNodes => new BuilderElement({
+      name: "m:e",
+      children: rowNodes
+    }));
+
+    const eqArrElem = new BuilderElement({
+      name: "m:eqArr",
+      children: rowElements
+    });
+
+    super({
+      name: "m:d",
+      children: [
+        new BuilderElement({
+          name: "m:dPr",
+          children: [
+            new BuilderElement({ name: "m:begChr", attributes: { val: { key: "m:val", value: "{" } } }),
+            new BuilderElement({ name: "m:endChr", attributes: { val: { key: "m:val", value: "" } } })
+          ]
+        }),
+        new BuilderElement({
+          name: "m:e",
+          children: [eqArrElem]
+        })
+      ]
+    });
+  }
+}
+
+const LATEX_SYMBOLS = {
+  "\\alpha": "α", "\\beta": "β", "\\gamma": "γ", "\\delta": "δ", "\\epsilon": "ε",
+  "\\theta": "θ", "\\lambda": "λ", "\\mu": "μ", "\\pi": "π", "\\rho": "ρ",
+  "\\sigma": "σ", "\\phi": "φ", "\\psi": "ψ", "\\omega": "ω", "\\Delta": "Δ",
+  "\\nu": "ν", "\\eta": "η", "\\xi": "ξ", "\\zeta": "ζ", "\\kappa": "κ",
+  "\\partial": "∂", "\\times": "×", "\\cdot": "·", "\\to": "→", "\\infty": "∞",
+  "\\pm": "±", "\\approx": "≈", "\\ne": "≠", "\\le": "≤", "\\ge": "≥",
+  "\\leq": "≤", "\\geq": "≥",
+  "\\rightarrow": "→", "\\leftarrow": "←", "\\rightleftharpoons": "⇌",
+  "\\longrightarrow": "⟶", "\\longleftarrow": "⟵", "\\longleftrightarrow": "⟷",
+  "\\leftrightarrow": "↔", "\\Rightarrow": "⇒", "\\Leftarrow": "⇐",
+  "\\,": " ", "\\;": " ", "\\quad": " ", "\\qquad": " ",
+  "\\left": "", "\\right": ""
+};
+
+const KNOWN_FUNCTIONS = [
+  "cosh", "sinh", "tanh", "coth", "sech", "csch",
+  "sin", "cos", "tan", "cot", "sec", "csc",
+  "log", "lg", "ln", "exp", "det", "gcd", "max", "min", "sup", "inf"
+];
+
+function readBracedGroup(str, pos) {
+  if (pos >= str.length) return { content: "", nextPos: pos };
+  if (str[pos] === "{") {
+    let depth = 1;
+    let i = pos + 1;
+    while (i < str.length && depth > 0) {
+      if (str[i] === "{") depth++;
+      else if (str[i] === "}") depth--;
+      i++;
+    }
+    return { content: str.substring(pos + 1, depth === 0 ? i - 1 : i), nextPos: i };
+  } else if (str[pos] === "[") {
+    let depth = 1;
+    let i = pos + 1;
+    while (i < str.length && depth > 0) {
+      if (str[i] === "[") depth++;
+      else if (str[i] === "]") depth--;
+      i++;
+    }
+    return { content: str.substring(pos + 1, depth === 0 ? i - 1 : i), nextPos: i };
+  } else if (str[pos] === "(") {
+    let depth = 1;
+    let i = pos + 1;
+    while (i < str.length && depth > 0) {
+      if (str[i] === "(") depth++;
+      else if (str[i] === ")") depth--;
+      i++;
+    }
+    return { content: str.substring(pos, i), nextPos: i };
+  } else {
+    if (str[pos] === "\\") {
+      const match = str.substring(pos).match(/^\\[a-zA-Z]+/);
+      if (match) return { content: match[0], nextPos: pos + match[0].length };
+    }
+    return { content: str[pos], nextPos: pos + 1 };
+  }
+}
+
+function parseLaTeXToMathNodes(latex) {
+  if (!latex) return [];
+  const nodes = [];
+  let i = 0;
+
+  while (i < latex.length) {
+    if (latex[i] === " " || latex[i] === "\t") {
+      i++;
+      continue;
+    }
+
+    // A. \begin{cases} ... \end{cases}
+    if (latex.startsWith("\\begin{cases}", i)) {
+      const endIdx = latex.indexOf("\\end{cases}", i);
+      const content = endIdx !== -1 ? latex.substring(i + 13, endIdx) : latex.substring(i + 13);
+      const rawRows = content.split("\\\\");
+      const casesRows = rawRows.map(row => {
+        const parts = row.split("&");
+        const rowNodes = [];
+        parts.forEach((p, pIdx) => {
+          if (pIdx > 0) rowNodes.push(new MathRun("  "));
+          rowNodes.push(...parseLaTeXToMathNodes(p.trim()));
+        });
+        return rowNodes;
+      }).filter(r => r.length > 0);
+
+      nodes.push(new MathCases({ rows: casesRows }));
+      i = endIdx !== -1 ? endIdx + 11 : latex.length;
+      continue;
+    }
+
+    // B. \begin{pmatrix}, \begin{bmatrix}, \begin{vmatrix}, \begin{matrix}
+    const envMatch = latex.substring(i).match(/^\\begin\{(pmatrix|bmatrix|vmatrix|matrix)\}/);
+    if (envMatch) {
+      const envType = envMatch[1];
+      const endTag = `\\end{${envType}}`;
+      const startLen = envMatch[0].length;
+      const endIdx = latex.indexOf(endTag, i);
+      const content = endIdx !== -1 ? latex.substring(i + startLen, endIdx) : latex.substring(i + startLen);
+
+      const rawRows = content.split("\\\\");
+      const matrixRows = rawRows.map(row => {
+        const cells = row.split("&");
+        return cells.map(c => parseLaTeXToMathNodes(c.trim()));
+      }).filter(r => r.length > 0 && r[0].length > 0);
+
+      let openChar = "[";
+      let closeChar = "]";
+      if (envType === "pmatrix") { openChar = "("; closeChar = ")"; }
+      else if (envType === "vmatrix") { openChar = "|"; closeChar = "|"; }
+      else if (envType === "matrix") { openChar = ""; closeChar = ""; }
+
+      nodes.push(new MathMatrix({ open: openChar, close: closeChar, rows: matrixRows }));
+      i = endIdx !== -1 ? endIdx + endTag.length : latex.length;
+      continue;
+    }
+
+    // C. \xrightarrow{condition} — arrow with condition above
+    if (latex.startsWith("\\xrightarrow", i)) {
+      let pos = i + 12;
+      while (pos < latex.length && latex[pos] === " ") pos++;
+      let condNodes = [];
+      if (latex[pos] === "{") {
+        const condGrp = readBracedGroup(latex, pos);
+        condNodes = parseLaTeXToMathNodes(condGrp.content);
+        pos = condGrp.nextPos;
+      }
+      nodes.push(new MathLimitUpper({
+        children: [new MathRun("→")],
+        limit: condNodes.length > 0 ? condNodes : [new MathRun("")]
+      }));
+      i = pos;
+      continue;
+    }
+
+    // 1. \frac{num}{den}
+    if (latex.startsWith("\\frac", i)) {
+      let pos = i + 5;
+      while (pos < latex.length && latex[pos] === " ") pos++;
+      const numGrp = readBracedGroup(latex, pos);
+      pos = numGrp.nextPos;
+      while (pos < latex.length && latex[pos] === " ") pos++;
+      const denGrp = readBracedGroup(latex, pos);
+      pos = denGrp.nextPos;
+
+      nodes.push(new MathFraction({
+        numerator: parseLaTeXToMathNodes(numGrp.content),
+        denominator: parseLaTeXToMathNodes(denGrp.content)
+      }));
+      i = pos;
+      continue;
+    }
+
+    // 2. \sqrt[opt]{arg} or \sqrt{arg}
+    if (latex.startsWith("\\sqrt", i)) {
+      let pos = i + 5;
+      while (pos < latex.length && latex[pos] === " ") pos++;
+      let degreeNodes = null;
+      if (latex[pos] === "[") {
+        const degGrp = readBracedGroup(latex, pos);
+        degreeNodes = parseLaTeXToMathNodes(degGrp.content);
+        pos = degGrp.nextPos;
+        while (pos < latex.length && latex[pos] === " ") pos++;
+      }
+      const argGrp = readBracedGroup(latex, pos);
+      pos = argGrp.nextPos;
+
+      nodes.push(new MathRadical({
+        degree: degreeNodes,
+        children: parseLaTeXToMathNodes(argGrp.content)
+      }));
+      i = pos;
+      continue;
+    }
+
+    // 3. \vec{arg}
+    if (latex.startsWith("\\vec", i)) {
+      let pos = i + 4;
+      while (pos < latex.length && latex[pos] === " ") pos++;
+      const argGrp = readBracedGroup(latex, pos);
+      nodes.push(new MathAccent({
+        accent: "⃗",
+        children: parseLaTeXToMathNodes(argGrp.content)
+      }));
+      i = argGrp.nextPos;
+      continue;
+    }
+
+    // 4. \lim_{sub}
+    if (latex.startsWith("\\lim", i)) {
+      let pos = i + 4;
+      while (pos < latex.length && latex[pos] === " ") pos++;
+      let subNodes = null;
+      if (latex[pos] === "_") {
+        pos++;
+        while (pos < latex.length && latex[pos] === " ") pos++;
+        const subGrp = readBracedGroup(latex, pos);
+        subNodes = parseLaTeXToMathNodes(subGrp.content);
+        pos = subGrp.nextPos;
+      }
+      if (subNodes) {
+        nodes.push(new MathLimitLower({
+          children: [new MathUprightRun("lim")],
+          limit: subNodes
+        }));
+      } else {
+        nodes.push(new MathUprightRun("lim"));
+      }
+      i = pos;
+      continue;
+    }
+
+    // 5. Integral & Summation operators: \int, \oint, \iint, \iiint, \idotsint, \sum, \prod
+    const opMatches = [
+      { cmd: "\\idotsint", accent: "∫⋯∫" },
+      { cmd: "\\iiint", accent: "∭" },
+      { cmd: "\\iint", accent: "∬" },
+      { cmd: "\\oint", accent: "∮" },
+      { cmd: "\\int", accent: "∫" },
+      { cmd: "\\sum", accent: "∑" },
+      { cmd: "\\prod", accent: "∏" }
+    ];
+    const matchedOp = opMatches.find(op => latex.startsWith(op.cmd, i));
+    if (matchedOp) {
+      let pos = i + matchedOp.cmd.length;
+      let subNodes = null;
+      let supNodes = null;
+
+      while (pos < latex.length) {
+        if (latex[pos] === " ") { pos++; continue; }
+        if (latex[pos] === "_") {
+          pos++;
+          while (pos < latex.length && latex[pos] === " ") pos++;
+          const grp = readBracedGroup(latex, pos);
+          subNodes = parseLaTeXToMathNodes(grp.content);
+          pos = grp.nextPos;
+        } else if (latex[pos] === "^") {
+          pos++;
+          while (pos < latex.length && latex[pos] === " ") pos++;
+          const grp = readBracedGroup(latex, pos);
+          supNodes = parseLaTeXToMathNodes(grp.content);
+          pos = grp.nextPos;
+        } else {
+          break;
+        }
+      }
+
+      // Parse the rest of the string as the integrand / body of the operator
+      const bodyLatex = latex.substring(pos);
+      const bodyNodes = parseLaTeXToMathNodes(bodyLatex);
+
+      nodes.push(new MathIntegralCustom({
+        accent: matchedOp.accent,
+        subScript: subNodes,
+        superScript: supNodes,
+        children: bodyNodes
+      }));
+
+      // Entire remaining string was consumed as body of integral
+      i = latex.length;
+      continue;
+    }
+
+    // 6. Standard Mathematical Functions: \sin, \cos, \tan, \cot, \sec, \csc, \sinh, \cosh, \tanh, \coth, \sech, \csch, \log, \lg, \ln, \exp, \det, \gcd, \max, \min, \sup, \inf
+    const matchedFunc = KNOWN_FUNCTIONS.find(fn => latex.startsWith("\\" + fn, i));
+    if (matchedFunc) {
+      let pos = i + matchedFunc.length + 1;
+      let supNodes = null;
+      while (pos < latex.length && latex[pos] === " ") pos++;
+
+      // Check for power e.g. \sin^2 x
+      if (latex[pos] === "^") {
+        pos++;
+        while (pos < latex.length && latex[pos] === " ") pos++;
+        const supGrp = readBracedGroup(latex, pos);
+        supNodes = parseLaTeXToMathNodes(supGrp.content);
+        pos = supGrp.nextPos;
+        while (pos < latex.length && latex[pos] === " ") pos++;
+      }
+
+      const fNameNodes = supNodes
+        ? [new MathSuperScript({ children: [new MathUprightRun(matchedFunc)], superScript: supNodes })]
+        : [new MathUprightRun(matchedFunc)];
+
+      // Read argument for function
+      let argNodes = [];
+      if (pos < latex.length) {
+        const argGrp = readBracedGroup(latex, pos);
+        argNodes = parseLaTeXToMathNodes(argGrp.content);
+        pos = argGrp.nextPos;
+      }
+
+      nodes.push(new MathFunction({
+        name: fNameNodes,
+        children: argNodes.length > 0 ? argNodes : [new MathRun("")]
+      }));
+
+      i = pos;
+      continue;
+    }
+
+    // 7. Subscript / Superscript attached to previous token or character
+    let tokenStr = "";
+    let isSymbolUpright = false;
+    let nextI = i;
+
+    if (latex[i] === "\\") {
+      const match = latex.substring(i).match(/^\\[a-zA-Z]+|^\\./);
+      if (match) {
+        if (LATEX_SYMBOLS[match[0]] !== undefined) {
+          tokenStr = LATEX_SYMBOLS[match[0]];
+        } else {
+          // Strip leading backslash and render as upright operator
+          tokenStr = match[0].startsWith("\\") ? match[0].substring(1) : match[0];
+          isSymbolUpright = true;
+        }
+        nextI = i + match[0].length;
+      } else {
+        tokenStr = "";
+        nextI = i + 1;
+      }
+    } else {
+      tokenStr = latex[i];
+      nextI = i + 1;
+    }
+
+    // Check if followed by _ or ^
+    let pos = nextI;
+    let subNodes = null;
+    let supNodes = null;
+
+    while (pos < latex.length) {
+      if (latex[pos] === " ") {
+        let peek = pos;
+        while (peek < latex.length && latex[peek] === " ") peek++;
+        if (latex[peek] === "_" || latex[peek] === "^") {
+          pos = peek;
+        } else {
+          break;
+        }
+      }
+      if (latex[pos] === "_") {
+        pos++;
+        while (pos < latex.length && latex[pos] === " ") pos++;
+        const grp = readBracedGroup(latex, pos);
+        subNodes = parseLaTeXToMathNodes(grp.content);
+        pos = grp.nextPos;
+      } else if (latex[pos] === "^") {
+        pos++;
+        while (pos < latex.length && latex[pos] === " ") pos++;
+        const grp = readBracedGroup(latex, pos);
+        supNodes = parseLaTeXToMathNodes(grp.content);
+        pos = grp.nextPos;
+      } else {
+        break;
+      }
+    }
+
+    const createTokenRun = (s) => isSymbolUpright ? new MathUprightRun(s) : new MathRun(s);
+
+    if (subNodes || supNodes) {
+      const baseNodes = tokenStr ? [createTokenRun(tokenStr)] : [];
+      if (subNodes && supNodes) {
+        nodes.push(new MathSubSuperScript({ children: baseNodes, subScript: subNodes, superScript: supNodes }));
+      } else if (subNodes) {
+        nodes.push(new MathSubScript({ children: baseNodes, subScript: subNodes }));
+      } else {
+        nodes.push(new MathSuperScript({ children: baseNodes, superScript: supNodes }));
+      }
+      i = pos;
+    } else {
+      if (tokenStr) nodes.push(createTokenRun(tokenStr));
+      i = nextI;
+    }
   }
 
-  // 2. Pre-process LaTeX math commands into clean Unicode math expressions
-  // Derivatives & fractions: \frac{d^2y}{dx^2} -> d²y/dx², \frac{dy}{dx} -> dy/dx, \frac{a}{b} -> a/b
-  text = text.replace(/\\frac\{\\partial\^?(\d+)?\s*([a-zA-Z])\}\{\\partial\s*([a-zA-Z])\^?(\d+)?\}/g, (m, p1, v1, v2, p2) => `∂${p1 ? '²' : ''}${v1}/∂${v2}${p2 ? '²' : ''}`);
-  text = text.replace(/\\frac\{d\^?(\d+)?\s*([a-zA-Z])\}\{d([a-zA-Z])\^?(\d+)?\}/g, (m, p1, v1, v2, p2) => `d${p1 ? '²' : ''}${v1}/d${v2}${p2 ? '²' : ''}`);
-  text = text.replace(/\\frac\{([^{}]+)\}\{([^{}]+)\}/g, (m, num, den) => {
-    const cleanNum = num.length > 5 ? `(${num})` : num;
-    const cleanDen = den.length > 5 ? `(${den})` : den;
-    return `${cleanNum}/${cleanDen}`;
-  });
+  return nodes;
+}
 
-  // Roots: \sqrt[n]{x} -> ⁿ√(x), \sqrt{x} -> √(x)
-  text = text.replace(/\\sqrt\[([^\]]+)\]\{([^{}]+)\}/g, (m, n, x) => `${n}√(${x})`);
-  text = text.replace(/\\sqrt\{([^{}]+)\}/g, (m, x) => `√(${x})`);
-  text = text.replace(/\\sqrt\s*([a-zA-Z0-9]+)/g, (m, x) => `√(${x})`);
-
-  // Integrals & Calculus: \int_a^b -> ∫_a^b, \iint -> ∬, \iiint -> ∭
-  text = text.replace(/\\iiint/g, "∭");
-  text = text.replace(/\\iint/g, "∬");
-  text = text.replace(/\\int/g, "∫");
-  text = text.replace(/\\partial/g, "∂");
-
-  // Summation, Product, Limit: \sum -> ∑, \prod -> ∏, \lim -> lim
-  text = text.replace(/\\sum/g, "∑");
-  text = text.replace(/\\prod/g, "∏");
-  text = text.replace(/\\lim_\{([^{}]+)\}/g, "lim_{$1}");
-  text = text.replace(/\\lim/g, "lim");
-  text = text.replace(/\\infty/g, "∞");
-
-  // Operators & Greek letters
-  text = text.replace(/\\pm/g, "±");
-  text = text.replace(/\\approx/g, "≈");
-  text = text.replace(/\\ne/g, "≠");
-  text = text.replace(/\\le/g, "≤");
-  text = text.replace(/\\ge/g, "≥");
-  text = text.replace(/\\cdot/g, "·");
-  text = text.replace(/\\to/g, "→");
-  text = text.replace(/\\pi/g, "π");
-  text = text.replace(/\\alpha/g, "α");
-  text = text.replace(/\\beta/g, "β");
-  text = text.replace(/\\theta/g, "θ");
-  text = text.replace(/\\lambda/g, "λ");
-  text = text.replace(/\\sigma/g, "σ");
-
-  // Trig & log functions: \sin -> sin, \cos -> cos, etc.
-  text = text.replace(/\\(sin|cos|tan|cot|sec|csc|log|ln)/g, "$1");
-  text = text.replace(/\\left|\\right/g, "");
-
+function parsePlainTextRuns(text, baseBold = false) {
+  if (!text) return [];
   const chemElements = "(?:H|He|Li|Be|B|C|N|O|F|Ne|Na|Mg|Al|Si|P|S|Cl|Ar|K|Ca|Sc|Ti|V|Cr|Mn|Fe|Co|Ni|Cu|Zn|Ga|Ge|As|Se|Br|Kr|Rb|Sr|Y|Zr|Nb|Mo|Tc|Ru|Rh|Pd|Ag|Cd|In|Sn|Sb|Te|I|Xe|Cs|Ba|La|Ce|Pr|Nd|Pm|Sm|Eu|Gd|Tb|Dy|Ho|Er|Tm|Yb|Lu|Hf|Ta|W|Re|Os|Ir|Pt|Au|Hg|Tl|Pb|Bi|Po|At|Rn|Fr|Ra|Ac|Th|Pa|U)";
 
-  // Regex matching:
-  // Group 1 & 2: Subscript with _{val} or chemical element + digits e.g. _{i=1}, H2, O2 -> subScript
-  // Group 3: Superscript with ^{val} or ^2 -> superScript
-  // Group 4: Unicode superscripts ², ³ -> superScript
-  // Group 5 & 6: Math variable + number e.g. x2 -> superScript
+  // Format chemical formulas in plain text like H_2O, CO_2, H_2SO_4, Fe_2O_3, NH_3, CH_4
+  let formattedText = text;
+  formattedText = formattedText.replace(new RegExp(`(${chemElements})_(\\d+)`, "g"), (m, el, n) => {
+    const subMap = { '0':'₀','1':'₁','2':'₂','3':'₃','4':'₄','5':'₅','6':'₆','7':'₇','8':'₈','9':'₉' };
+    return el + String(n).split('').map(c => subMap[c] || c).join('');
+  });
+  // Reaction arrows and conditions in plain text
+  // \xrightarrow{condition} → "→" with condition as superscript placeholder (best plain-text approximation)
+  formattedText = formattedText.replace(/\\xrightarrow\{([^}]*)\}/g, (m, cond) => {
+    const condClean = cond
+      .replace(/\\Delta/g, 'Δ').replace(/\\nu/g, 'ν').replace(/\\,/g, ' ')
+      .replace(/\\[a-zA-Z]+/g, '').trim();
+    return condClean ? `→(${condClean})` : '→';
+  });
+  formattedText = formattedText.replace(/\\longrightarrow/g, "⟶");
+  formattedText = formattedText.replace(/\\longleftrightarrow/g, "⟷");
+  formattedText = formattedText.replace(/\\rightarrow|\\to(?=[^a-z]|$)/g, "→");
+  formattedText = formattedText.replace(/\\leftarrow/g, "←");
+  formattedText = formattedText.replace(/\\rightleftharpoons/g, "⇌");
+  // Clean up remaining common LaTeX commands in plain chemical text
+  formattedText = formattedText.replace(/\\Delta/g, 'Δ');
+  formattedText = formattedText.replace(/\\nu/g, 'ν');
+  formattedText = formattedText.replace(/\\[,;]/g, ' ');
+
   const masterRegex = new RegExp(
     `_(?:\\{([^{}]+)\\}|([a-zA-Z0-9=+\\-]+))|\\^(?:\\{([^{}]+)\\}|([a-zA-Z0-9=+\\-]+))|(${chemElements}+)(\\d{1,2})|([²³])|(?:([a-z])(\\d+))`,
     "g"
@@ -332,20 +800,17 @@ export const parseQuestionTextRuns = (rawText, baseBold = false) => {
   let lastIndex = 0;
   let match;
 
-  while ((match = masterRegex.exec(text)) !== null) {
+  while ((match = masterRegex.exec(formattedText)) !== null) {
     const matchIndex = match.index;
     if (matchIndex > lastIndex) {
-      runs.push({ text: text.substring(lastIndex, matchIndex) });
+      runs.push({ text: formattedText.substring(lastIndex, matchIndex) });
     }
 
     if (match[1] !== undefined || match[2] !== undefined) {
-      // Subscript from _{...} or _val
       runs.push({ text: match[1] || match[2], subScript: true });
     } else if (match[3] !== undefined || match[4] !== undefined) {
-      // Superscript from ^{...} or ^val
       runs.push({ text: match[3] || match[4], superScript: true });
     } else if (match[5] !== undefined && match[6] !== undefined) {
-      // Chemical element + number e.g. H2 -> H (normal), 2 (subscript)
       runs.push({ text: match[5] });
       runs.push({ text: match[6], subScript: true });
     } else if (match[7] !== undefined) {
@@ -359,8 +824,8 @@ export const parseQuestionTextRuns = (rawText, baseBold = false) => {
     lastIndex = masterRegex.lastIndex;
   }
 
-  if (lastIndex < text.length) {
-    runs.push({ text: text.substring(lastIndex) });
+  if (lastIndex < formattedText.length) {
+    runs.push({ text: formattedText.substring(lastIndex) });
   }
 
   return runs.map(r => new TextRun({
@@ -369,6 +834,50 @@ export const parseQuestionTextRuns = (rawText, baseBold = false) => {
     subScript: r.subScript || false,
     superScript: r.superScript || false
   }));
+}
+
+export const parseQuestionTextRuns = (rawText, baseBold = false) => {
+  if (!rawText) return [new TextRun({ text: "", bold: baseBold })];
+  const text = String(rawText).trim();
+
+  if (/^(?:CO[1-6]|K[1-6])$/i.test(text)) {
+    return [new TextRun({ text, bold: baseBold })];
+  }
+
+  let parts = [];
+  if (text.includes('$')) {
+    parts = text.split('$');
+  } else {
+    const hasLatexCmd = /\\(?:frac|sqrt|vec|lim|int|oint|iint|iiint|idotsint|sum|prod|alpha|beta|theta|pi|partial|times|cdot|to|cosh|sinh|tanh|coth|sech|csch|sin|cos|tan|cot|sec|csc|log|lg|ln|exp|max|min|sup|inf|begin|pmatrix|bmatrix|vmatrix|xrightarrow|longrightarrow|longleftarrow|longleftrightarrow)\b/i.test(text);
+    if (hasLatexCmd) {
+      parts = ["", text, ""];
+    } else {
+      parts = [text];
+    }
+  }
+
+  if (parts.length === 1) {
+    return parsePlainTextRuns(parts[0], baseBold);
+  }
+
+  const result = [];
+  for (let idx = 0; idx < parts.length; idx++) {
+    const part = parts[idx];
+    if (idx % 2 === 0) {
+      if (part) {
+        result.push(...parsePlainTextRuns(part, baseBold));
+      }
+    } else {
+      if (part && part.trim()) {
+        const mathNodes = parseLaTeXToMathNodes(part.trim());
+        if (mathNodes.length > 0) {
+          result.push(new DocxMath({ children: mathNodes }));
+        }
+      }
+    }
+  }
+
+  return result.length > 0 ? result : [new TextRun({ text: "", bold: baseBold })];
 };
 
 export const exportUnitTestPaperDocx = async (config) => {

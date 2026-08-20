@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routes import auth, import_routes, requisitions, students, question_bank
+from app.routes import auth, import_routes, requisitions, students, question_bank, academic, faculty_marks, arrear_manager
 from app.database import db
 
 app = FastAPI(title="UniScore FastAPI", version="1.0.0")
@@ -21,14 +21,24 @@ async def startup_db_client():
     await db.QuestionBank.create_index([("part", 1)])
     await db.QuestionBank.create_index([("subjectCode", 1), ("unit", 1), ("part", 1)])
 
+    # New Academic Indexes
+    await db.student_subjects.create_index([("registerNumber", 1), ("subjectCode", 1), ("semester", 1)])
+    await db.faculty_subject_access.create_index([("facultyId", 1)])
+    await db.internal_marks.create_index([("subjectCode", 1), ("semester", 1)])
+    await db.mark_history.create_index([("subjectCode", 1), ("registerNumber", 1)])
+
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(import_routes.router, prefix="/api/import", tags=["import"])
 app.include_router(requisitions.router, prefix="/api/requisitions", tags=["requisitions"])
 app.include_router(students.router, prefix="/api/students", tags=["students"])
 app.include_router(question_bank.router, prefix="/api/question-bank", tags=["question-bank"])
 app.include_router(question_bank.router, prefix="/api/question-paper", tags=["question-paper"])
+app.include_router(academic.router, prefix="/api/academic", tags=["academic"])
+app.include_router(faculty_marks.router, prefix="/api/faculty-marks", tags=["faculty-marks"])
+app.include_router(arrear_manager.router, prefix="/api/arrears", tags=["arrears"])
 
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
 

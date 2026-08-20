@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import mammoth from "mammoth";
 import { API_BASE, exportSemesterPaperDocx, exportUnitTestPaperDocx } from "../utils";
 import FormattedQuestion from "./FormattedQuestion";
+import FacultyMarksEntry from "./FacultyMarksEntry";
 
 const DEPARTMENT_OPTIONS = [
   "DEPARTMENT OF CSE",
@@ -97,8 +98,15 @@ export default function FacultyDashboard({ user, onLogout }) {
   const [partC, setPartC] = useState({ qNo: 16, a: { question: "", btl: "K4", co: "CO5", marks: "15" }, b: { question: "", btl: "K4", co: "CO5", marks: "15" } });
   const [customContent, setCustomContent] = useState("");
   // Unit test generator states
+  const getAutoQpCode = (ciaOpt, subCode) => {
+    const numMatch = (ciaOpt || "1").match(/\d+/);
+    const ciaNum = numMatch ? numMatch[0] : "1";
+    const cleanCode = (subCode || "").trim().toUpperCase();
+    return `CIA${ciaNum}${cleanCode}`;
+  };
+
   const [unitHeader, setUnitHeader] = useState({
-    qpCode: "24AD4R011",
+    qpCode: "CIA124AD4R011",
     examSessionType: "CONTINUOUS INTERNAL ASSESSMENT",
     examMonth: "JULY",
     examYear: "2026",
@@ -107,8 +115,10 @@ export default function FacultyDashboard({ user, onLogout }) {
     ciaOption: "CIA - 1",
     department: "Department of Information Technology",
     commonBranches: "",
+    subjectCode: "24AD4R011",
+    subjectName: "Data Communication and Computer Networks",
     subject: "24AD4R011 - Data Communication and Computer Networks",
-    regulations: "(Regulations 2024)",
+    regulations: "",
     duration: "2:00 hours",
     maxMarks: "50"
   });
@@ -388,6 +398,7 @@ export default function FacultyDashboard({ user, onLogout }) {
           const defaultMark = i === 2 ? "8" : "16";
           const qA = data.partB[i * 2];
           const qB = data.partB[i * 2 + 1];
+          const pairKLevel = qA?.kLevel || qB?.kLevel || item.a.kLevel;
           return {
             ...item,
             a: {
@@ -395,7 +406,7 @@ export default function FacultyDashboard({ user, onLogout }) {
               question: qA?.question || item.a.question,
               equation: qA?.equation || "",
               hasEquation: qA?.hasEquation || false,
-              kLevel: qA?.kLevel || item.a.kLevel,
+              kLevel: pairKLevel,
               co: qA?.co || defaultCo,
               marks: qA?.marks ? String(Math.round(Number(qA.marks))) : defaultMark,
               image: qA?.image !== undefined ? qA.image : item.a.image,
@@ -405,7 +416,7 @@ export default function FacultyDashboard({ user, onLogout }) {
               question: qB?.question || item.b.question,
               equation: qB?.equation || "",
               hasEquation: qB?.hasEquation || false,
-              kLevel: qB?.kLevel || item.b.kLevel,
+              kLevel: pairKLevel,
               co: qB?.co || defaultCo,
               marks: qB?.marks ? String(Math.round(Number(qB.marks))) : defaultMark,
               image: qB?.image !== undefined ? qB.image : item.b.image,
@@ -435,20 +446,30 @@ export default function FacultyDashboard({ user, onLogout }) {
       }
 
       if (data.partB && data.partB.length > 0) {
-        newPartB = unitPartB2021.map((item, i) => ({
-          ...item,
-          a: { ...item.a, question: data.partB[i*2]?.question || item.a.question, equation: data.partB[i*2]?.equation || "", hasEquation: data.partB[i*2]?.hasEquation || false, kLevel: data.partB[i*2]?.kLevel || item.a.kLevel, co: data.partB[i*2]?.co || defaultCo, image: data.partB[i*2]?.image !== undefined ? data.partB[i*2].image : item.a.image },
-          b: { ...item.b, question: data.partB[i*2+1]?.question || item.b.question, equation: data.partB[i*2+1]?.equation || "", hasEquation: data.partB[i*2+1]?.hasEquation || false, kLevel: data.partB[i*2+1]?.kLevel || item.b.kLevel, co: data.partB[i*2+1]?.co || defaultCo, image: data.partB[i*2+1]?.image !== undefined ? data.partB[i*2+1].image : item.b.image },
-        }));
+        newPartB = unitPartB2021.map((item, i) => {
+          const qA = data.partB[i*2];
+          const qB = data.partB[i*2+1];
+          const pairKLevel = qA?.kLevel || qB?.kLevel || item.a.kLevel;
+          return {
+            ...item,
+            a: { ...item.a, question: qA?.question || item.a.question, equation: qA?.equation || "", hasEquation: qA?.hasEquation || false, kLevel: pairKLevel, co: qA?.co || defaultCo, image: qA?.image !== undefined ? qA.image : item.a.image },
+            b: { ...item.b, question: qB?.question || item.b.question, equation: qB?.equation || "", hasEquation: qB?.hasEquation || false, kLevel: pairKLevel, co: qB?.co || defaultCo, image: qB?.image !== undefined ? qB.image : item.b.image },
+          };
+        });
         setUnitPartB2021(newPartB);
       }
 
       if (data.partC && data.partC.length > 0) {
-        newPartC = unitPartC2021.map((item, i) => ({
-          ...item,
-          a: { ...item.a, question: data.partC[i*2]?.question || item.a.question, equation: data.partC[i*2]?.equation || "", hasEquation: data.partC[i*2]?.hasEquation || false, kLevel: data.partC[i*2]?.kLevel || item.a.kLevel, co: data.partC[i*2]?.co || defaultCo, image: data.partC[i*2]?.image !== undefined ? data.partC[i*2].image : item.a.image },
-          b: { ...item.b, question: data.partC[i*2+1]?.question || item.b.question, equation: data.partC[i*2+1]?.equation || "", hasEquation: data.partC[i*2+1]?.hasEquation || false, kLevel: data.partC[i*2+1]?.kLevel || item.b.kLevel, co: data.partC[i*2+1]?.co || defaultCo, image: data.partC[i*2+1]?.image !== undefined ? data.partC[i*2+1].image : item.b.image },
-        }));
+        newPartC = unitPartC2021.map((item, i) => {
+          const qA = data.partC[i*2];
+          const qB = data.partC[i*2+1];
+          const pairKLevel = qA?.kLevel || qB?.kLevel || item.a.kLevel;
+          return {
+            ...item,
+            a: { ...item.a, question: qA?.question || item.a.question, equation: qA?.equation || "", hasEquation: qA?.hasEquation || false, kLevel: pairKLevel, co: qA?.co || defaultCo, image: qA?.image !== undefined ? qA.image : item.a.image },
+            b: { ...item.b, question: qB?.question || item.b.question, equation: qB?.equation || "", hasEquation: qB?.hasEquation || false, kLevel: pairKLevel, co: qB?.co || defaultCo, image: qB?.image !== undefined ? qB.image : item.b.image },
+          };
+        });
         setUnitPartC2021(newPartC);
       }
       computeCoDist(newPartA, newPartB, newPartC);
@@ -464,43 +485,17 @@ export default function FacultyDashboard({ user, onLogout }) {
       return;
     }
 
-    if (!unitHeader.semesterWord || unitHeader.semesterWord.trim() === "") {
-      alert("⚠️ Semester selection is compulsory! Please select a Semester.");
+    if (!unitHeader.regulations || unitHeader.regulations.trim() === "") {
+      alert("⚠️ Regulation selection is compulsory! Please select a Regulation.");
       return;
-    }
-
-    if (!unitHeader.department) {
-      alert("Please select Department.");
-      return;
-    }
-
-    // Check for duplicate paper for same subject & unit
-    try {
-      const res = await fetch(`${API_BASE}/api/import/question-papers`);
-      if (res.ok) {
-        const papers = await res.json();
-        const normSub = subCode.toUpperCase().trim().replace(/[^A-Z0-9]/g, "");
-        const normUnit = (qbUnit || "").toUpperCase().trim();
-
-        const duplicate = papers.find(p => {
-          if (p.examType !== "UNIT_TEST") return false;
-          const pUnit = (p.unit || "").toUpperCase().trim();
-          const pSub = (p.subjectCode || p.subject || "").toUpperCase().trim().replace(/[^A-Z0-9]/g, "");
-          return (pUnit === normUnit || pUnit.includes(normUnit) || normUnit.includes(pUnit)) && normSub && (pSub.includes(normSub) || normSub.includes(pSub));
-        });
-
-        if (duplicate) {
-          alert(`⚠️ Notice: Question paper for subject ${subCode} in ${qbUnit} is already generated!`);
-        }
-      }
-    } catch (checkErr) {
-      console.warn("Could not check duplicate paper:", checkErr);
     }
 
     try {
       const is2024 = unitHeader.regulations.includes("2024");
+      const autoQpCode = getAutoQpCode(unitHeader.ciaOption, subCode);
+      const updatedUnitHeader = { ...unitHeader, qpCode: autoQpCode };
       const config = {
-        unitHeader,
+        unitHeader: updatedUnitHeader,
         unitPartA: is2024 ? unitPartA2024 : unitPartA2021,
         unitPartB: is2024 ? unitPartB2024 : unitPartB2021,
         unitPartC: is2024 ? null : unitPartC2021,
@@ -508,7 +503,7 @@ export default function FacultyDashboard({ user, onLogout }) {
       };
       await exportUnitTestPaperDocx(config);
       try {
-        await fetch(`${API_BASE}/api/import/save-question-paper`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ subjectCode: subCode, department: unitHeader.department, examSession: unitHeader.examSession, hasPartC: !is2024, examType: "UNIT_TEST", facultyName: user.name, semester: unitHeader.semesterWord, unit: qbUnit, paperData: JSON.stringify(config) }) });
+        await fetch(`${API_BASE}/api/import/save-question-paper`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ subjectCode: subCode, qpCode: autoQpCode, department: unitHeader.department, examSession: unitHeader.examSession, hasPartC: !is2024, examType: "UNIT_TEST", facultyName: user.name, semester: unitHeader.semesterWord, unit: qbUnit, paperData: JSON.stringify(config) }) });
         if(activeTask) await handleUpdateReqStatus(activeTask.id, "SUBMITTED");
       } catch (saveErr) {
         console.warn("Could not save to portal DB:", saveErr);
@@ -539,15 +534,43 @@ export default function FacultyDashboard({ user, onLogout }) {
     catch (err) { alert("❌ Failed to read DOCX file. Make sure it is a valid Word Document."); }
   };
 
-  if (view === "tasks") {
-    const pendingTasks = myReqs.filter(r => r.status === "PENDING" || r.status === "ACCEPTED" || r.status === "READY");
-    
-    return (
-      <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-gray-800">
-        <header className="bg-white shadow px-6 py-4 flex justify-between items-center z-10 sticky top-0"><h1 className="text-xl font-bold text-indigo-600 flex items-center gap-2">👨‍🏫 Faculty Portal</h1><div className="flex items-center gap-4"><button onClick={onLogout} className="text-sm text-red-500 font-medium hover:underline">Logout</button></div></header>
-        <main className="flex-1 max-w-5xl mx-auto w-full p-6">
-           <div className="flex justify-between items-center mb-6">
-             <h2 className="text-2xl font-bold text-slate-800">My Official Tasks</h2>
+  if (view === "marks" || view === "tasks") return (
+    <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-gray-800">
+      <header className="bg-white shadow px-6 py-4 flex justify-between items-center z-10 sticky top-0">
+        <h1 className="text-xl font-bold text-indigo-600 flex items-center gap-2">👨‍🏫 Faculty Portal</h1>
+        <div className="flex items-center gap-4">
+          <button onClick={onLogout} className="text-sm text-red-500 font-medium hover:underline">Logout</button>
+        </div>
+      </header>
+
+      <div className="bg-white border-b border-gray-200 px-6 pt-3 flex gap-4 overflow-x-auto">
+        <button
+          onClick={() => setView("marks")}
+          className={`pb-2.5 px-4 font-bold text-sm transition-all border-b-2 ${
+            view === "marks" ? "border-indigo-600 text-indigo-600" : "border-transparent text-gray-500 hover:text-gray-700"
+          }`}
+        >
+          📝 My Assigned Subjects & Internal Marks
+        </button>
+        <button
+          onClick={() => setView("tasks")}
+          className={`pb-2.5 px-4 font-bold text-sm transition-all border-b-2 ${
+            view === "tasks" ? "border-indigo-600 text-indigo-600" : "border-transparent text-gray-500 hover:text-gray-700"
+          }`}
+        >
+          📋 Official Tasks ({myReqs.filter(r => r.status === "PENDING" || r.status === "ACCEPTED" || r.status === "READY").length})
+        </button>
+      </div>
+
+      <main className="flex-1 max-w-5xl mx-auto w-full p-6">
+        {view === "marks" && <FacultyMarksEntry user={user} />}
+
+        {view === "tasks" && (() => {
+          const pendingTasks = myReqs.filter(r => r.status === "PENDING" || r.status === "ACCEPTED" || r.status === "READY");
+          return (
+          <>
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-2xl font-bold text-slate-800">My Official Tasks</h2>
              <button
                onClick={() => {
                  setActiveTask(null);
@@ -562,10 +585,11 @@ export default function FacultyDashboard({ user, onLogout }) {
                    department: "DEPARTMENT OF " + (user?.department || "CSE"),
                    commonBranches: "",
                    subject: "",
-                   regulations: "(Regulations 2024)",
+                   regulations: "",
                    duration: "2:00 hours",
                    maxMarks: "50"
                  });
+                 setQbUnit("Unit 1");
                  setUnitPartA2021(Array.from({ length: 5 }, (_, i) => ({ qNo: i + 1, question: "", marks: "2", kLevel: "K1", co: "CO1" })));
                  setUnitPartB2021([
                    { qNo: 6, a: { question: "", marks: "13", kLevel: "K2", co: "CO2" }, b: { question: "", marks: "13", kLevel: "K2", co: "CO2" } },
@@ -712,10 +736,14 @@ export default function FacultyDashboard({ user, onLogout }) {
                  })}
               </div>
            )}
-        </main>
-      </div>
-    );
-  }
+          </>
+          );
+        })()}
+      </main>
+    </div>
+  );
+
+
 
   if (view === "unit") {
     return (
@@ -737,12 +765,20 @@ export default function FacultyDashboard({ user, onLogout }) {
             <h2 className="text-xl font-bold mb-4 text-teal-800">Unit Exam Header Details</h2>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Question Paper Code *</label>
-                <input value={unitHeader.qpCode} onChange={e => setUnitHeader({...unitHeader, qpCode: e.target.value})} className="w-full p-2 border rounded font-mono font-bold text-teal-900" placeholder="Question Paper Code (e.g. CIA1GE3751)" />
-              </div>
-              <div>
                 <label className="block text-xs font-bold text-gray-600 uppercase mb-1">CIA Exam *</label>
-                <select value={unitHeader.ciaOption} onChange={e => setUnitHeader({...unitHeader, ciaOption: e.target.value})} className="w-full p-2 border rounded bg-white text-sm font-bold text-teal-800">
+                <select
+                  value={unitHeader.ciaOption}
+                  onChange={e => {
+                    const newCia = e.target.value;
+                    const numMatch = newCia.match(/\d+/);
+                    const ciaNum = numMatch ? numMatch[0] : "1";
+                    const autoUnit = `Unit ${ciaNum}`;
+                    const autoQpCode = getAutoQpCode(newCia, unitHeader.subjectCode);
+                    setUnitHeader({ ...unitHeader, ciaOption: newCia, qpCode: autoQpCode });
+                    setQbUnit(autoUnit);
+                  }}
+                  className="w-full p-2 border rounded bg-white text-sm font-bold text-teal-800"
+                >
                   <option value="CIA - 1">CIA - 1</option>
                   <option value="CIA - 2">CIA - 2</option>
                   <option value="CIA - 3">CIA - 3</option>
@@ -752,7 +788,12 @@ export default function FacultyDashboard({ user, onLogout }) {
               </div>
               <div>
                 <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Regulation *</label>
-                <select value={unitHeader.regulations} onChange={e => setUnitHeader({...unitHeader, regulations: e.target.value})} className="w-full p-2 border rounded bg-white text-sm font-bold text-teal-800">
+                <select
+                  value={unitHeader.regulations || ""}
+                  onChange={e => setUnitHeader({...unitHeader, regulations: e.target.value})}
+                  className="w-full p-2 border rounded bg-white text-sm font-bold text-teal-800"
+                >
+                  <option value="">Select Regulation</option>
                   <option value="(Regulations 2021)">(Regulations 2021)</option>
                   <option value="(Regulations 2024)">(Regulations 2024)</option>
                 </select>
@@ -826,7 +867,8 @@ export default function FacultyDashboard({ user, onLogout }) {
                     const code = e.target.value;
                     const sName = unitHeader.subjectName || "";
                     const combined = sName ? `${code} - ${sName}` : code;
-                    setUnitHeader({ ...unitHeader, subjectCode: code, subject: combined });
+                    const autoQpCode = getAutoQpCode(unitHeader.ciaOption, code);
+                    setUnitHeader({ ...unitHeader, subjectCode: code, subject: combined, qpCode: autoQpCode });
                   }}
                   className="w-full p-2 border rounded font-mono font-bold text-teal-900 uppercase"
                   placeholder="e.g. 24AD4R011"
@@ -872,6 +914,9 @@ export default function FacultyDashboard({ user, onLogout }) {
 
             <form onSubmit={async (e) => {
               e.preventDefault();
+              if (!unitHeader.regulations || unitHeader.regulations.trim() === "") {
+                return alert("⚠️ Regulation selection is compulsory! Please select a Regulation before uploading.");
+              }
               if (!unitHeader.semesterWord || unitHeader.semesterWord.trim() === "") {
                 return alert("⚠️ Semester selection is compulsory! Please select a Semester before uploading.");
               }
@@ -880,25 +925,7 @@ export default function FacultyDashboard({ user, onLogout }) {
               }
               if (!qbUploadFile) return alert("Please select an Excel file.");
 
-              // Check for duplicate paper
-              const subCode = unitHeader.subjectCode || unitHeader.subject || "";
-              try {
-                const checkRes = await fetch(`${API_BASE}/api/import/question-papers`);
-                if (checkRes.ok) {
-                  const papers = await checkRes.json();
-                  const normSub = subCode.toUpperCase().trim().replace(/[^A-Z0-9]/g, "");
-                  const normUnit = (qbUnit || "").toUpperCase().trim();
-                  const duplicate = papers.find(p => {
-                    if (p.examType !== "UNIT_TEST") return false;
-                    const pUnit = (p.unit || "").toUpperCase().trim();
-                    const pSub = (p.subjectCode || p.subject || "").toUpperCase().trim().replace(/[^A-Z0-9]/g, "");
-                    return (pUnit === normUnit || pUnit.includes(normUnit) || normUnit.includes(pUnit)) && normSub && (pSub.includes(normSub) || normSub.includes(pSub));
-                  });
-                  if (duplicate) {
-                    alert(`⚠️ Notice: Question paper for subject ${subCode} in ${qbUnit} is already generated!`);
-                  }
-                }
-              } catch (errCheck) {}
+
 
               setUploadingQb(true);
               const body = new FormData();
