@@ -883,41 +883,152 @@ export const parseQuestionTextRuns = (rawText, baseBold = false) => {
     return result.length > 0 ? result : [new TextRun({ text: "", bold: baseBold })];
   }
 
-  const mathRegex = /(\\begin\{(?:matrix|bmatrix|pmatrix|vmatrix|cases)\}[\s\S]*?\\end\{(?:matrix|bmatrix|pmatrix|vmatrix|cases)\}|\\frac\{[^{}]*\}\{[^{}]*\}|\\sqrt(?:\[[^{}]*\])?\{[^{}]*\}|\\(?:int|iint|iiint|oint|idotsint|sum|prod|lim|max|min|sup|inf)(?:_\{[^{}]*\}|_[a-zA-Z0-9=+\-]+)?(?:\^\{[^{}]*\}|\^[a-zA-Z0-9=+\-]+)?|\\vec\{[^{}]*\}|\\(?:alpha|beta|gamma|delta|theta|lambda|mu|pi|sigma|phi|psi|omega|Delta|Theta|Lambda|Pi|Sigma|Omega|partial|nabla|infty|times|cdot)\b)/g;
+  const latexCommandRegex = /\\(?:frac|sqrt|vec|sum|prod|int|oint|iint|iiint|idotsint|lim|infty|cosh|sinh|tanh|coth|sech|csch|exp|sin|cos|tan|cot|sec|csc|log|lg|ln|max|min|sup|inf|left|right|partial|pm|approx|ne|le|ge|leq|geq|pi|alpha|beta|gamma|delta|theta|lambda|sigma|cdot|to|rightarrow|leftarrow|rightleftharpoons|xrightarrow|longrightarrow|longleftarrow|longleftrightarrow|begin|pmatrix|bmatrix|vmatrix|cases)(?![a-zA-Z])/i;
 
-  const segments = [];
-  let lastIdx = 0;
-  let m;
-
-  while ((m = mathRegex.exec(text)) !== null) {
-    if (m.index > lastIdx) {
-      segments.push({ isMath: false, content: text.substring(lastIdx, m.index) });
-    }
-    segments.push({ isMath: true, content: m[0] });
-    lastIdx = mathRegex.lastIndex;
-  }
-
-  if (lastIdx < text.length) {
-    segments.push({ isMath: false, content: text.substring(lastIdx) });
-  }
-
-  if (segments.length === 0) {
+  if (!latexCommandRegex.test(text)) {
     return parsePlainTextRuns(text, baseBold);
   }
 
+  const ENGLISH_WORDS_REGEX = /^\s+(?:and|where|over|under|in|of|the|is|if|when|for|with|find|evaluate|calculate|determine|show|prove|such|that|given|let|whereby|hence|thus|obtain)\b/i;
+
   const result = [];
-  for (const seg of segments) {
-    if (!seg.isMath) {
-      if (seg.content) {
-        result.push(...parsePlainTextRuns(seg.content, baseBold));
+  let i = 0;
+
+  while (i < text.length) {
+    const nextBs = text.indexOf('\\', i);
+    if (nextBs === -1) {
+      const plain = text.substring(i);
+      if (plain) result.push(...parsePlainTextRuns(plain, baseBold));
+      break;
+    }
+
+    if (nextBs > i) {
+      const plain = text.substring(i, nextBs);
+      if (plain) result.push(...parsePlainTextRuns(plain, baseBold));
+      i = nextBs;
+    }
+
+    let mathEnd = i;
+
+    // Check for \begin{matrix|pmatrix|bmatrix|vmatrix|cases}... \end{...}
+    const envMatch = text.substring(i).match(/^\\begin\{(matrix|pmatrix|bmatrix|vmatrix|cases)\}/i);
+    if (envMatch) {
+      const envName = envMatch[1];
+      const endTag = `\\end{${envName}}`;
+      const endIdx = text.indexOf(endTag, i);
+      if (endIdx !== -1) {
+        mathEnd = endIdx + endTag.length;
+      } else {
+        mathEnd = text.length;
       }
     } else {
-      if (seg.content && seg.content.trim()) {
-        const mathNodes = parseLaTeXToMathNodes(seg.content.trim());
+      let pos = i;
+      let parenDepth = 0;
+
+      while (pos < text.length) {
+        if (parenDepth === 0 && ENGLISH_WORDS_REGEX.test(text.substring(pos))) {
+          break;
+        }
+
+        if (text[pos] === '\\') {
+          const cmdMatch = text.substring(pos).match(/^\\[a-zA-Z]+/);
+          if (cmdMatch) {
+            const cmd = cmdMatch[0];
+            pos += cmd.length;
+
+            if (cmd === '\\frac') {
+              for (let argCount = 0; argCount < 2; argCount++) {
+                while (pos < text.length && /\s/.test(text[pos])) pos++;
+                if (text[pos] === '{') {
+                  const grp = readBracedGroup(text, pos);
+                  if (grp) pos = grp.nextPos;
+                }
+              }
+            } else if (cmd === '\\sqrt') {
+              while (pos < text.length && /\s/.test(text[pos])) pos++;
+              if (text[pos] === '[') {
+                const grp = readBracedGroup(text, pos);
+                if (grp) pos = grp.nextPos;
+              }
+              while (pos < text.length && /\s/.test(text[pos])) pos++;
+              if (text[pos] === '{') {
+                const grp = readBracedGroup(text, pos);
+                if (grp) pos = grp.nextPos;
+              }
+            } else if (cmd === '\\vec' || cmd === '\\xrightarrow') {
+              while (pos < text.length && /\s/.test(text[pos])) pos++;
+              if (text[pos] === '{') {
+                const grp = readBracedGroup(text, pos);
+                if (grp) pos = grp.nextPos;
+              }
+            } else if (/^\\(?:int|iint|iiint|oint|idotsint|sum|prod|lim)$/.test(cmd)) {
+              while (pos < text.length) {
+                while (pos < text.length && /\s/.test(text[pos])) pos++;
+                if (text[pos] === '_' || text[pos] === '^') {
+                  pos++;
+                  while (pos < text.length && /\s/.test(text[pos])) pos++;
+                  if (text[pos] === '{') {
+                    const grp = readBracedGroup(text, pos);
+                    if (grp) pos = grp.nextPos;
+                  } else {
+                    pos++;
+                  }
+                } else {
+                  break;
+                }
+              }
+            }
+          } else {
+            pos++;
+          }
+        } else if (text[pos] === '_' || text[pos] === '^') {
+          pos++;
+          while (pos < text.length && /\s/.test(text[pos])) pos++;
+          if (text[pos] === '{') {
+            const grp = readBracedGroup(text, pos);
+            if (grp) pos = grp.nextPos;
+          } else {
+            pos++;
+          }
+        } else if (text[pos] === '{') {
+          const grp = readBracedGroup(text, pos);
+          if (grp) pos = grp.nextPos;
+          else pos++;
+        } else if (text[pos] === '(') {
+          parenDepth++;
+          pos++;
+        } else if (text[pos] === ')') {
+          if (parenDepth > 0) parenDepth--;
+          pos++;
+        } else if (/[a-zA-Z0-9\+\-\*\/\=\[\]\,\.\s]/.test(text[pos])) {
+          const diffMatch = text.substring(pos).match(/^d[xyztr\theta]/);
+          if (diffMatch) {
+            pos += diffMatch[0].length;
+            continue;
+          }
+          if (parenDepth === 0 && (text[pos] === '.' || text[pos] === ',' || text[pos] === ';') && pos + 1 < text.length && /\s+[A-Z]/.test(text.substring(pos + 1))) {
+            break;
+          }
+          pos++;
+        } else {
+          break;
+        }
+      }
+      mathEnd = pos;
+    }
+
+    if (mathEnd > i) {
+      const mathStr = text.substring(i, mathEnd).trim();
+      if (mathStr) {
+        const mathNodes = parseLaTeXToMathNodes(mathStr);
         if (mathNodes.length > 0) {
           result.push(new DocxMath({ children: mathNodes }));
         }
       }
+      i = mathEnd;
+    } else {
+      result.push(...parsePlainTextRuns(text[i], baseBold));
+      i++;
     }
   }
 

@@ -66,3 +66,46 @@
   transform: translateY(-1px);
   box-shadow: 0 10px 22px rgba(79, 70, 229, 0.3);
 }
+
+/* =========================
+   MATHEMATICAL EQUATION LAYOUT & KATEX STYLING
+   ========================= */
+
+.formatted-question {
+  display: inline;
+  line-height: 1.8;
+  word-break: break-word;
+}
+
+.katex-eq-container {
+  display: inline-block;
+  vertical-align: middle;
+  margin: 4px 2px;
+  padding: 2px 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  line-height: normal;
+}
+
+/* Ensure KaTeX internal elements preserve proportions without clipping */
+.katex-eq-container .katex {
+  font-size: 1.05em;
+  line-height: 1.2;
+  text-indent: 0;
+  white-space: nowrap;
+}
+
+/* Proper padding for display/block equations if rendered in display mode */
+.katex-display {
+  margin: 0.5em 0 !important;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* Prevent table cell row collisions when containing formatted questions */
+td .formatted-question {
+  display: block;
+  padding: 4px 0;
+}
+
