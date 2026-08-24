@@ -1040,7 +1040,13 @@ export const exportUnitTestPaperDocx = async (config) => {
     const { unitHeader, unitPartA, unitPartB, unitPartC, coDistribution } = config || {};
     if (!unitHeader) { alert("⚠️ This document is corrupted or from an older version. Please delete it."); return; }
 
-    const safeSubject = (unitHeader.subject || "UnitTest").replace(/[^a-zA-Z0-9]/g, "_").replace(/_+/g, "_").substring(0, 15);
+    const subCode = (unitHeader.subjectCode || "").toUpperCase();
+    const subName = (unitHeader.subjectName || "").toUpperCase();
+    const fullSubject = (subCode && subName) 
+      ? `${subCode} - ${subName}` 
+      : (unitHeader.subject || "").toUpperCase();
+
+    const safeSubject = (fullSubject || "UnitTest").replace(/[^a-zA-Z0-9]/g, "_").replace(/_+/g, "_").substring(0, 15);
 
     const is2024 = (unitHeader.regulations || "").includes("2024");
 
@@ -1207,7 +1213,7 @@ export const exportUnitTestPaperDocx = async (config) => {
       ...(unitHeader.commonBranches && unitHeader.commonBranches.trim() ? [
         new Paragraph({ children: [new TextRun({ text: `(Common to: ${unitHeader.commonBranches.trim()})`, size: 18 })], alignment: AlignmentType.CENTER })
       ] : []),
-      new Paragraph({ children: [new TextRun({ text: unitHeader.subject || "", bold: true, size: 22 })], alignment: AlignmentType.CENTER }),
+      new Paragraph({ children: [new TextRun({ text: fullSubject || "", bold: true, size: 20 })], alignment: AlignmentType.CENTER }),
       new Paragraph({ children: [new TextRun({ text: unitHeader.regulations || "(Regulations 2021)", size: 18 })], alignment: AlignmentType.CENTER }),
       new Paragraph({ text: " ", spacing: { after: 100 } }),
       new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: noBorders, rows: [new TableRow({ children: [new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Duration: " + (unitHeader.duration || "2:00 hours"), bold: true, size: 18 })] })] }), new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Max. Marks: " + (unitHeader.maxMarks || "50"), bold: true, size: 18 })], alignment: AlignmentType.RIGHT })] })] })] }),

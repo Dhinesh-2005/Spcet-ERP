@@ -116,8 +116,8 @@ export default function FacultyDashboard({ user, onLogout }) {
     department: "Department of Information Technology",
     commonBranches: "",
     subjectCode: "24AD4R011",
-    subjectName: "Data Communication and Computer Networks",
-    subject: "24AD4R011 - Data Communication and Computer Networks",
+    subjectName: "DATA COMMUNICATION AND COMPUTER NETWORKS",
+    subject: "24AD4R011 - DATA COMMUNICATION AND COMPUTER NETWORKS",
     regulations: "",
     duration: "2:00 hours",
     maxMarks: "50"
@@ -265,8 +265,11 @@ export default function FacultyDashboard({ user, onLogout }) {
   const startGenerating = (task) => {
     setActiveTask(task);
     if(task.examType === "UNIT_TEST") {
-       setUnitHeader({...unitHeader, subject: task.subjectCode, department: task.department});
-       setQbSubject(task.subjectCode || "");
+       const subCode = (task.subjectCode || "").toUpperCase();
+       const subName = (task.subjectName || "").toUpperCase();
+       const combined = (subCode && subName) ? `${subCode} - ${subName}` : (subCode || subName);
+       setUnitHeader({ ...unitHeader, subjectCode: subCode, subjectName: subName, subject: combined, department: task.department });
+       setQbSubject(subCode);
        setView("unit");
     } else {
        setHeader({...header, subject: task.subjectCode, department: task.department});
@@ -485,8 +488,9 @@ export default function FacultyDashboard({ user, onLogout }) {
   };
 
   const handleGenerateUnitWord = async () => {
-    const subCode = unitHeader.subjectCode || unitHeader.subject || "";
-    const subName = unitHeader.subjectName || "";
+    const subCode = (unitHeader.subjectCode || unitHeader.subject || "").toUpperCase();
+    const subName = (unitHeader.subjectName || "").toUpperCase();
+    const fullSubject = (subCode && subName) ? `${subCode} - ${subName}` : (unitHeader.subject || "").toUpperCase();
 
     if (!subCode.trim() || !subName.trim()) {
       alert("⚠️ Both Subject Code and Subject Name are compulsory!");
@@ -501,7 +505,7 @@ export default function FacultyDashboard({ user, onLogout }) {
     try {
       const is2024 = unitHeader.regulations.includes("2024");
       const autoQpCode = getAutoQpCode(unitHeader.ciaOption, subCode);
-      const updatedUnitHeader = { ...unitHeader, qpCode: autoQpCode };
+      const updatedUnitHeader = { ...unitHeader, subjectCode: subCode, subjectName: subName, subject: fullSubject, qpCode: autoQpCode };
       const config = {
         unitHeader: updatedUnitHeader,
         unitPartA: is2024 ? unitPartA2024 : unitPartA2021,
@@ -593,6 +597,8 @@ export default function FacultyDashboard({ user, onLogout }) {
                    ciaOption: "CIA - 1",
                    department: "DEPARTMENT OF " + (user?.department || "CSE"),
                    commonBranches: "",
+                   subjectCode: "",
+                   subjectName: "",
                    subject: "",
                    regulations: "",
                    duration: "2:00 hours",
@@ -873,11 +879,11 @@ export default function FacultyDashboard({ user, onLogout }) {
                 <input
                   value={unitHeader.subjectCode || ""}
                   onChange={e => {
-                    const code = e.target.value;
-                    const sName = unitHeader.subjectName || "";
+                    const code = e.target.value.toUpperCase();
+                    const sName = (unitHeader.subjectName || "").toUpperCase();
                     const combined = sName ? `${code} - ${sName}` : code;
                     const autoQpCode = getAutoQpCode(unitHeader.ciaOption, code);
-                    setUnitHeader({ ...unitHeader, subjectCode: code, subject: combined, qpCode: autoQpCode });
+                    setUnitHeader({ ...unitHeader, subjectCode: code, subjectName: sName, subject: combined, qpCode: autoQpCode });
                   }}
                   className="w-full p-2 border rounded font-mono font-bold text-teal-900 uppercase"
                   placeholder="e.g. 24AD4R011"
@@ -889,13 +895,13 @@ export default function FacultyDashboard({ user, onLogout }) {
                 <input
                   value={unitHeader.subjectName || ""}
                   onChange={e => {
-                    const name = e.target.value;
-                    const sCode = unitHeader.subjectCode || "";
+                    const name = e.target.value.toUpperCase();
+                    const sCode = (unitHeader.subjectCode || "").toUpperCase();
                     const combined = sCode ? `${sCode} - ${name}` : name;
-                    setUnitHeader({ ...unitHeader, subjectName: name, subject: combined });
+                    setUnitHeader({ ...unitHeader, subjectCode: sCode, subjectName: name, subject: combined });
                   }}
-                  className="w-full p-2 border rounded font-bold text-teal-700"
-                  placeholder="e.g. Data Communication and Computer Networks"
+                  className="w-full p-2 border rounded font-bold text-teal-700 uppercase"
+                  placeholder="e.g. DATA COMMUNICATION AND COMPUTER NETWORKS"
                   required
                 />
               </div>
