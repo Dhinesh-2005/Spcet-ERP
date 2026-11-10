@@ -9,9 +9,13 @@ from bson import ObjectId
 from app.database import db, clean_doc, clean_docs
 from app.models.schemas import (
     DepartmentModel, RegulationModel, AcademicYearModel, SubjectModel,
-    FacultySubjectAccessModel, AssessmentConfigModel, PreviousResultRow
+    FacultySubjectAccessModel, AssessmentConfigModel, PreviousResultRow,
+    BatchModel, AcademicRuleConfigModel, GradeBoundaryModel
 )
 from app.services.academic_service import academic_service, GRADE_MAP
+from app.services.calculation_engine import calculation_engine, STATUS_PASS, STATUS_RA
+from app.services.arrear_service import arrear_service
+from app.services.audit_service import audit_service
 
 router = APIRouter()
 
@@ -90,6 +94,93 @@ async def get_academic_years():
         ]
     return docs
 
+@router.post("/academic-years")
+async def create_or_update_academic_year(ay: AcademicYearModel):
+    year_str = ay.year.strip()
+    if not year_str:
+        raise HTTPException(status_code=400, detail="Academic year string is required.")
+    doc = ay.dict(exclude_none=True, exclude={"id"})
+    if ay.isCurrent:
+        await db.academic_years.update_many({}, {"$set": {"isCurrent": False}})
+    await db.academic_years.update_one(
+        {"year": year_str},
+        {"$set": doc},
+        upsert=True
+    )
+    return {"message": f"Academic Year '{year_str}' saved successfully.", "academicYear": doc}
+
+@router.get("/batches")
+async def get_batches(department: Optional[str] = Query(None)):
+    query = {}
+    if department and department != "ALL":
+        query["department"] = department.strip().upper()
+    cursor = db.batches.find(query).sort("startYear", -1)
+    docs = [clean_doc(d) async for d in cursor]
+    if not docs:
+        default_batches = [
+            {"batchName": "2021-2025", "department": "CSE", "startYear": 2021, "endYear": 2025, "currentSemester": 8, "regulation": "2021", "status": "ACTIVE"},
+            {"batchName": "2022-2026", "department": "CSE", "startYear": 2022, "endYear": 2026, "currentSemester": 6, "regulation": "2021", "status": "ACTIVE"},
+            {"batchName": "2023-2027", "department": "CSE", "startYear": 2023, "endYear": 2027, "currentSemester": 4, "regulation": "2021", "status": "ACTIVE"},
+            {"batchName": "2024-2028", "department": "CSE", "startYear": 2024, "endYear": 2028, "currentSemester": 2, "regulation": "2024", "status": "ACTIVE"},
+        ]
+        return default_batches
+    return docs
+
+@router.post("/batches")
+async def create_or_update_batch(batch: BatchModel):
+    batch.department = batch.department.strip().upper()
+    batch.batchName = batch.batchName.strip()
+    if not batch.batchName or not batch.department:
+        raise HTTPException(status_code=400, detail="Batch name and department are required.")
+    doc = batch.dict(exclude_none=True, exclude={"id"})
+    await db.batches.update_one(
+        {"batchName": batch.batchName, "department": batch.department},
+        {"$set": doc},
+        upsert=True
+    )
+    return {"message": f"Batch '{batch.batchName}' saved successfully.", "batch": doc}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CENTRAL ACADEMIC CONFIGURATION (Rules, Grade Scales, Component Bounds)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/config")
+async def get_academic_config(
+    regulation: Optional[str] = Query("ALL"),
+    department: Optional[str] = Query("ALL"),
+    semester: Optional[int] = Query(None)
+):
+    query = {}
+    if regulation and regulation != "ALL":
+        query["regulation"] = regulation.strip()
+    if department and department != "ALL":
+        query["department"] = department.strip().upper()
+    if semester:
+        query["semester"] = int(semester)
+
+    doc = await db.academic_configs.find_one(query)
+    if not doc and query:
+        doc = await db.academic_configs.find_one({"isDefault": True})
+    if not doc:
+        default_cfg = calculation_engine.get_default_config()
+        return clean_doc(default_cfg.dict())
+    return clean_doc(doc)
+
+@router.post("/config")
+async def save_academic_config(config_payload: AcademicRuleConfigModel):
+    doc = config_payload.dict(exclude_none=True, exclude={"id"})
+    query = {
+        "regulation": doc.get("regulation", "ALL"),
+        "department": doc.get("department", "ALL"),
+        "semester": doc.get("semester")
+    }
+    await db.academic_configs.update_one(
+        query,
+        {"$set": doc},
+        upsert=True
+    )
+    return {"message": "Academic configuration saved successfully.", "config": doc}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. SUBJECT MASTER
 # ─────────────────────────────────────────────────────────────────────────────
@@ -99,20 +190,39 @@ async def get_subjects(
     department: Optional[str] = Query(None),
     semester: Optional[int] = Query(None),
     paperType: Optional[str] = Query(None),
-    regulation: Optional[str] = Query(None)
+    subjectType: Optional[str] = Query(None),
+    regulation: Optional[str] = Query(None),
+    status: Optional[str] = Query(None)
 ):
     query = {}
     if department and department != "ALL":
         query["department"] = department.strip().upper()
     if semester:
         query["semester"] = int(semester)
-    if paperType and paperType != "ALL":
-        query["paperType"] = paperType.strip().upper()
+    
+    st_filter = subjectType or paperType
+    if st_filter and st_filter != "ALL":
+        norm_st = st_filter.strip().upper()
+        query["$or"] = [{"subjectType": norm_st}, {"paperType": norm_st}]
+        
     if regulation and regulation != "ALL":
         query["regulation"] = regulation.strip()
+    if status and status != "ALL":
+        query["status"] = status.strip().upper()
 
     cursor = db.subjects.find(query).sort("subjectCode", 1)
-    return [clean_doc(d) async for d in cursor]
+    subjects = []
+    async for d in cursor:
+        cd = clean_doc(d)
+        st_val = (cd.get("subjectType") or cd.get("paperType") or "THEORY").strip().upper()
+        cd["subjectType"] = st_val
+        cd["paperType"] = st_val
+        if "status" not in cd:
+            cd["status"] = "ACTIVE"
+        if "isActive" not in cd:
+            cd["isActive"] = (cd["status"] == "ACTIVE")
+        subjects.append(cd)
+    return subjects
 
 @router.post("/subjects")
 async def add_or_update_subject(sub: SubjectModel):
@@ -121,11 +231,25 @@ async def add_or_update_subject(sub: SubjectModel):
     if not sub.subjectCode or not sub.department:
         raise HTTPException(status_code=400, detail="Subject code and department are required.")
 
+    st_val = (sub.subjectType or sub.paperType or "THEORY").strip().upper()
+    sub.subjectType = st_val
+    sub.paperType = st_val
+    if not sub.status:
+        sub.status = "ACTIVE" if sub.isActive else "INACTIVE"
+    sub.isActive = (sub.status.upper() == "ACTIVE")
+
     doc = sub.dict(exclude_none=True, exclude={"id"})
     await db.subjects.update_one(
-        {"subjectCode": sub.subjectCode, "department": sub.department},
+        {"subjectCode": sub.subjectCode, "department": sub.department, "regulation": sub.regulation},
         {"$set": doc},
         upsert=True
+    )
+    await audit_service.log_event(
+        user="admin",
+        role="admin",
+        action="SUBJECT_CREATE",
+        entity=f"Subject:{sub.subjectCode}:{sub.department}",
+        new_value={"subjectCode": sub.subjectCode, "name": sub.subjectName, "credits": sub.credits, "type": sub.subjectType}
     )
     return {"message": f"Subject {sub.subjectCode} saved successfully."}
 
@@ -231,9 +355,17 @@ async def upload_subjects_excel(
 
             raw_sem = cell_val(sem_idx)
             try:
-                sem = int(float(raw_sem)) if raw_sem else int(defaultSemester)
+                sem = int(float(raw_sem)) if raw_sem else (int(defaultSemester) if defaultSemester else 1)
             except ValueError:
-                sem = int(defaultSemester)
+                sem = int(defaultSemester) if defaultSemester else 1
+
+            norm_type = paper_type
+            if norm_type in ["PRACTICAL", "LAB"]:
+                st_val = "PRACTICAL"
+            elif "INTEG" in norm_type:
+                st_val = "INTEGRATED"
+            else:
+                st_val = "THEORY"
 
             doc = {
                 "subjectCode": code,
@@ -241,8 +373,11 @@ async def upload_subjects_excel(
                 "department": dept_name,
                 "semester": sem,
                 "credits": credits,
-                "paperType": paper_type,
-                "regulation": regulation.strip()
+                "subjectType": st_val,
+                "paperType": st_val,
+                "regulation": regulation.strip(),
+                "status": "ACTIVE",
+                "isActive": True
             }
 
             res = await db.subjects.update_one(
@@ -368,19 +503,26 @@ async def bulk_delete_subjects(payload: Dict[str, Any]):
 @router.delete("/subjects/{subjectCode}")
 async def delete_single_subject(subjectCode: str, department: Optional[str] = Query(None), regulation: Optional[str] = Query(None)):
     code = subjectCode.strip().upper()
-    q = {"subjectCode": code}
-    if department:
-        q["department"] = department.strip().upper()
-    if regulation:
+    q: Dict[str, Any] = {"subjectCode": {"$regex": f"^{re.escape(code)}$", "$options": "i"}}
+    if department and department.strip().upper() != "ALL":
+        q["department"] = {"$regex": f"^{re.escape(department.strip())}$", "$options": "i"}
+    if regulation and regulation.strip().upper() != "ALL":
         q["regulation"] = regulation.strip()
 
-    result = await db.subjects.delete_one(q)
-    await db.student_subjects.delete_many({"subjectCode": code})
+    res_sub = await db.subjects.delete_many(q)
+    res_st = await db.student_subjects.delete_many({"subjectCode": {"$regex": f"^{re.escape(code)}$", "$options": "i"}})
+    await db.faculty_subject_access.update_many(
+        {"subjectCodes": code},
+        {"$pull": {"subjectCodes": code}}
+    )
 
-    if result.deleted_count == 0:
+    if res_sub.deleted_count == 0 and res_st.deleted_count == 0:
         raise HTTPException(status_code=404, detail=f"Subject {subjectCode} not found.")
 
-    return {"message": f"Subject {subjectCode} deleted successfully."}
+    return {
+        "message": f"Subject {subjectCode} deleted successfully ({res_sub.deleted_count} master, {res_st.deleted_count} student assignment records removed).",
+        "deletedCount": res_sub.deleted_count + res_st.deleted_count
+    }
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. FACULTY SUBJECT ACCESS (Permissions)
@@ -391,20 +533,146 @@ async def get_all_faculty_access():
     cursor = db.faculty_subject_access.find({})
     return [clean_doc(d) async for d in cursor]
 
+@router.get("/faculty-access/available-subjects")
+async def get_available_subjects_for_faculty_access(
+    department: Optional[str] = Query("ALL"),
+    regulation: Optional[str] = Query("ALL"),
+    semester: Optional[str] = Query("ALL"),
+    academicYear: Optional[str] = Query("ALL"),
+    search: Optional[str] = Query(None)
+):
+    """
+    Returns subjects that are currently available/offered to students through
+    existing student curriculum / enrollment data (db.student_subjects),
+    enriched with metadata from Subject Master (db.subjects).
+    """
+    students_map = {}
+    async for st in db.students.find({}, {"registerNumber": 1, "department": 1, "semester": 1, "regulation": 1, "academicYear": 1, "batch": 1}):
+        reg_k = str(st.get("registerNumber", "")).strip().upper()
+        if reg_k:
+            students_map[reg_k] = st
+
+    master_subjects_list = [clean_doc(s) async for s in db.subjects.find({})]
+
+    distinct_offerings = {}
+    async for doc in db.student_subjects.find({}):
+        code = str(doc.get("subjectCode", "")).strip().upper()
+        if not code:
+            continue
+        
+        st_reg = str(doc.get("registerNumber", "")).strip().upper()
+        student_doc = students_map.get(st_reg)
+
+        dept = str(doc.get("department") or (student_doc.get("department") if student_doc else "") or "").strip().upper()
+        
+        sem_val = doc.get("subjectSemester") or doc.get("semester") or (student_doc.get("semester") if student_doc else 1) or 1
+        try:
+            sem = int(sem_val)
+        except (ValueError, TypeError):
+            sem = 1
+
+        master_doc = next((s for s in master_subjects_list if s.get("subjectCode") == code and (s.get("department") or "").upper() == dept and s.get("subjectName")), None)
+        if not master_doc:
+            master_doc = next((s for s in master_subjects_list if s.get("subjectCode") == code and s.get("subjectName")), None)
+        if not master_doc:
+            clean_c = code.replace(" ", "")
+            master_doc = next((s for s in master_subjects_list if str(s.get("subjectCode", "")).replace(" ", "").upper() == clean_c and s.get("subjectName")), None)
+
+        if not dept:
+            dept = str(master_doc.get("department") or "").strip().upper() if master_doc else "ALL"
+            if not dept:
+                dept = "ALL"
+
+        reg = str(doc.get("regulation") or (student_doc.get("regulation") if student_doc else "") or (master_doc.get("regulation") if master_doc else "") or "2021").strip()
+        ay = str(doc.get("academicYear") or (student_doc.get("academicYear") if student_doc else "") or "2025-2026").strip()
+
+        s_name = str((master_doc.get("subjectName") if master_doc else None) or doc.get("subjectName") or code).strip()
+        credits_val = float(master_doc.get("credits") if master_doc and master_doc.get("credits") is not None else (doc.get("credits") or 0.0))
+        paper_type = str((master_doc.get("paperType") or master_doc.get("subjectType") if master_doc else None) or doc.get("paperType") or "THEORY").strip().upper()
+        sub_id = str((master_doc.get("_id") or master_doc.get("id") if master_doc else None) or doc.get("_id") or code)
+
+        key = (code, dept, sem, reg, ay)
+        if key not in distinct_offerings:
+            distinct_offerings[key] = {
+                "subjectId": sub_id,
+                "subjectCode": code,
+                "subjectName": s_name,
+                "studentDepartment": dept,
+                "department": dept,
+                "semester": sem,
+                "regulation": reg,
+                "academicYear": ay,
+                "credits": credits_val,
+                "paperType": paper_type,
+                "category": doc.get("category", "REGULAR")
+            }
+
+    results = []
+    dep_filt = (department or "ALL").strip().upper()
+    reg_filt = (regulation or "ALL").strip().upper()
+    sem_filt = (semester or "ALL").strip().upper()
+    ay_filt = (academicYear or "ALL").strip().upper()
+    q_filt = (search or "").strip().lower()
+
+    for item in distinct_offerings.values():
+        if dep_filt != "ALL" and item["studentDepartment"] != dep_filt:
+            continue
+        if reg_filt != "ALL" and item["regulation"].upper() != reg_filt:
+            continue
+        if sem_filt != "ALL":
+            try:
+                if item["semester"] != int(sem_filt):
+                    continue
+            except ValueError:
+                pass
+        if ay_filt != "ALL" and item["academicYear"].upper() != ay_filt:
+            continue
+        if q_filt:
+            if q_filt not in item["subjectCode"].lower() and q_filt not in item["subjectName"].lower():
+                continue
+        results.append(item)
+
+    results.sort(key=lambda x: (x["studentDepartment"], x["semester"], x["subjectCode"]))
+    return results
+
 @router.get("/faculty-access/{faculty_id}")
 async def get_faculty_access(faculty_id: str):
     fac_id = faculty_id.strip()
     doc = await db.faculty_subject_access.find_one({"facultyId": fac_id})
+    fac = await db.faculties.find_one({"registerNumber": fac_id})
     if not doc:
-        # Fallback check in faculties collection
-        fac = await db.faculties.find_one({"registerNumber": fac_id})
         return {
             "facultyId": fac_id,
             "facultyName": fac.get("name", "") if fac else "",
             "department": fac.get("department", "") if fac else "",
-            "subjectCodes": []
+            "subjectCodes": [],
+            "assignments": []
         }
-    return clean_doc(doc)
+    data = clean_doc(doc)
+    assignments = data.get("assignments") or []
+    subject_codes = data.get("subjectCodes") or []
+
+    # Backward compatibility: populate assignments if only subjectCodes exists
+    if not assignments and subject_codes:
+        synthesized = []
+        for code in subject_codes:
+            sub = await db.subjects.find_one({"subjectCode": code})
+            synthesized.append({
+                "subjectId": str(sub.get("_id")) if sub else code,
+                "subjectCode": code,
+                "subjectName": sub.get("subjectName", code) if sub else code,
+                "studentDepartment": sub.get("department", data.get("department", "ALL")) if sub else data.get("department", "ALL"),
+                "regulation": sub.get("regulation", "2021") if sub else "2021",
+                "semester": sub.get("semester", 1) if sub else 1,
+                "academicYear": "2025-2026",
+                "status": "ACTIVE"
+            })
+        assignments = synthesized
+
+    data["assignments"] = assignments
+    all_codes = list(dict.fromkeys([a.get("subjectCode") for a in assignments if a.get("subjectCode")] + subject_codes))
+    data["subjectCodes"] = all_codes
+    return data
 
 @router.post("/faculty-access")
 async def save_faculty_access(payload: FacultySubjectAccessModel):
@@ -415,12 +683,121 @@ async def save_faculty_access(payload: FacultySubjectAccessModel):
     doc = payload.dict(exclude_none=True, exclude={"id"})
     doc["facultyId"] = fac_id
 
+    assignments = doc.get("assignments") or []
+    if not assignments and doc.get("subjectCodes"):
+        for code in doc.get("subjectCodes"):
+            sub = await db.subjects.find_one({"subjectCode": code})
+            assignments.append({
+                "subjectId": str(sub.get("_id")) if sub else code,
+                "subjectCode": code,
+                "subjectName": sub.get("subjectName", code) if sub else code,
+                "studentDepartment": sub.get("department", doc.get("department", "ALL")) if sub else doc.get("department", "ALL"),
+                "regulation": sub.get("regulation", "2021") if sub else "2021",
+                "semester": sub.get("semester", 1) if sub else 1,
+                "academicYear": "2025-2026",
+                "status": "ACTIVE"
+            })
+
+    # DUPLICATE PREVENTION:
+    # Do not allow exact same faculty + subject + student department + regulation + semester + academic year assignment to be duplicated.
+    unique_assignments = []
+    seen_keys = set()
+    for a in assignments:
+        code = str(a.get("subjectCode", "")).strip().upper()
+        if not code:
+            continue
+        s_dept = str(a.get("studentDepartment", "")).strip().upper() or doc.get("department", "ALL")
+        reg = str(a.get("regulation", "")).strip().upper() or "2021"
+        sem = int(a.get("semester") or 1)
+        ay = str(a.get("academicYear", "")).strip().upper() or "2025-2026"
+
+        dedup_key = (fac_id.upper(), code, s_dept, reg, sem, ay)
+        if dedup_key in seen_keys:
+            continue
+        seen_keys.add(dedup_key)
+
+        item = dict(a)
+        item["facultyId"] = fac_id
+        item["subjectCode"] = code
+        item["studentDepartment"] = s_dept
+        item["regulation"] = reg
+        item["semester"] = sem
+        item["academicYear"] = ay
+        item["status"] = item.get("status") or "ACTIVE"
+        unique_assignments.append(item)
+
+    doc["assignments"] = unique_assignments
+    unique_codes = list(dict.fromkeys([a["subjectCode"] for a in unique_assignments]))
+    doc["subjectCodes"] = unique_codes
+
     await db.faculty_subject_access.update_one(
         {"facultyId": fac_id},
         {"$set": doc},
         upsert=True
     )
-    return {"message": f"Subject access updated for faculty {fac_id}."}
+    await audit_service.log_event(
+        user="admin",
+        role="admin",
+        action="FACULTY_ASSIGN",
+        entity=f"FacultyAccess:{fac_id}",
+        new_value=doc
+    )
+    return {"message": f"Subject access updated for faculty {fac_id}.", "facultyAccess": clean_doc(doc)}
+
+@router.delete("/faculty-access/{faculty_id}/assignment")
+async def remove_faculty_subject_assignment(
+    faculty_id: str,
+    subjectCode: str = Query(...),
+    studentDepartment: Optional[str] = Query(None),
+    semester: Optional[int] = Query(None),
+    academicYear: Optional[str] = Query(None),
+    regulation: Optional[str] = Query(None)
+):
+    fac_id = faculty_id.strip()
+    sub_code = subjectCode.strip().upper()
+    doc = await db.faculty_subject_access.find_one({"facultyId": fac_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail=f"No access record found for faculty {fac_id}")
+
+    existing_assignments = doc.get("assignments", [])
+
+    def matches(a):
+        if a.get("subjectCode", "").upper() != sub_code:
+            return False
+        if studentDepartment and studentDepartment != "ALL" and a.get("studentDepartment", "").upper() != studentDepartment.strip().upper():
+            return False
+        if semester and int(a.get("semester", 1)) != int(semester):
+            return False
+        if academicYear and academicYear != "ALL" and a.get("academicYear", "").upper() != academicYear.strip().upper():
+            return False
+        if regulation and regulation != "ALL" and a.get("regulation", "").upper() != regulation.strip().upper():
+            return False
+        return True
+
+    new_assignments = [a for a in existing_assignments if not matches(a)]
+    new_codes = list(dict.fromkeys([a["subjectCode"] for a in new_assignments]))
+    if not new_assignments and sub_code in doc.get("subjectCodes", []):
+        new_codes = [c for c in doc.get("subjectCodes", []) if c.upper() != sub_code]
+
+    await db.faculty_subject_access.update_one(
+        {"facultyId": fac_id},
+        {"$set": {
+            "assignments": new_assignments,
+            "subjectCodes": new_codes
+        }}
+    )
+    await audit_service.log_event(
+        user="admin",
+        role="admin",
+        action="FACULTY_UNASSIGN",
+        entity=f"FacultyAccess:{fac_id}:{sub_code}",
+        details={"removedSubject": sub_code, "remaining": len(new_assignments)}
+    )
+    return {
+        "message": f"Subject {sub_code} unassigned from faculty {fac_id}.",
+        "assignments": new_assignments,
+        "subjectCodes": new_codes
+    }
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 4. ASSESSMENT CONFIG (Unit Tests / Assignments Max Marks Scheme)
@@ -440,14 +817,14 @@ async def get_assessment_config(
     if not doc:
         # Default component scheme if not configured yet
         default_components = [
-            {"name": "UT1", "maxMarks": 20.0, "weightage": 1.0},
-            {"name": "UT2", "maxMarks": 20.0, "weightage": 1.0},
-            {"name": "Unit 1", "maxMarks": 20.0, "weightage": 1.0},
-            {"name": "Unit 2", "maxMarks": 20.0, "weightage": 1.0},
-            {"name": "Unit 3", "maxMarks": 20.0, "weightage": 1.0},
-            {"name": "Unit 4", "maxMarks": 20.0, "weightage": 1.0},
-            {"name": "Unit 5", "maxMarks": 20.0, "weightage": 1.0},
-            {"name": "Assignment", "maxMarks": 10.0, "weightage": 1.0},
+            {"name": "UT1", "maxMarks": 100.0, "weightage": 1.0},
+            {"name": "UT2", "maxMarks": 100.0, "weightage": 1.0},
+            {"name": "Unit 1", "maxMarks": 100.0, "weightage": 1.0},
+            {"name": "Unit 2", "maxMarks": 100.0, "weightage": 1.0},
+            {"name": "Unit 3", "maxMarks": 100.0, "weightage": 1.0},
+            {"name": "Unit 4", "maxMarks": 100.0, "weightage": 1.0},
+            {"name": "Unit 5", "maxMarks": 100.0, "weightage": 1.0},
+            {"name": "Assignment", "maxMarks": 40.0, "weightage": 1.0},
         ]
         return {
             "department": department,
@@ -808,6 +1185,52 @@ async def import_previous_results(payload: Dict[str, Any]):
         else:
             updated += 1
 
+        # Sync into db.results as published historical result
+        result_record = {
+            "registerNumber": reg_no,
+            "subjectCode": sub_code,
+            "subjectName": sub_name,
+            "semester": str(sem_val),
+            "department": dept_val,
+            "credits": float(credits_val),
+            "subjectType": "THEORY",
+            "grade": grade,
+            "gradePoint": gp_val,
+            "result": res_val,
+            "finalMarks": gp_val * 10,
+            "finalMarksDecimal": float(gp_val * 10),
+            "internalRaw": 0.0,
+            "internalConverted": 0.0,
+            "externalRaw": gp_val * 10,
+            "externalConverted": gp_val * 10,
+            "isArrear": (res_val == "FAIL" or grade == "RA"),
+            "arrearStatus": "ARREAR" if (res_val == "FAIL" or grade == "RA") else "REGULAR",
+            "isPublished": True,
+            "updatedAt": datetime.utcnow().isoformat()
+        }
+        await db.results.update_one(
+            {"registerNumber": reg_no, "subjectCode": sub_code, "semester": str(sem_val)},
+            {"$set": result_record},
+            upsert=True
+        )
+
+        # Detect failed subject and automatically create/update arrear lifecycle record
+        await arrear_service.register_or_update_arrear(
+            register_number=reg_no,
+            subject_code=sub_code,
+            semester=sem_val,
+            result=res_val,
+            grade=grade,
+            grade_point=gp_val,
+            final_marks=float(gp_val * 10),
+            internal_marks=0.0,
+            external_marks=float(gp_val * 10),
+            academic_year=ay_val,
+            subject_name=sub_name,
+            credits=float(credits_val),
+            subject_type="THEORY"
+        )
+
         # Update or create student profile record to guarantee immediate visibility
         student_doc = await db.students.find_one({"registerNumber": reg_no})
         student_update = {}
@@ -915,5 +1338,27 @@ async def delete_previous_results(
         "deletedCount": res.deleted_count
     }
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 7. AUDIT LOGS RETRIEVAL
+# ─────────────────────────────────────────────────────────────────────────────
 
-
+@router.get("/audit-logs")
+async def get_system_audit_logs(
+    user: Optional[str] = Query(None),
+    action: Optional[str] = Query(None),
+    entity: Optional[str] = Query(None),
+    page: int = Query(1),
+    limit: int = Query(50)
+):
+    """
+    Returns paginated audit logs for system operations:
+    student/subject creation, mark upload/modification, result calculation, publishing,
+    locking/unlocking, and arrear lifecycles.
+    """
+    return await audit_service.get_audit_logs(
+        user=user,
+        action=action,
+        entity=entity,
+        page=page,
+        limit=limit
+    )

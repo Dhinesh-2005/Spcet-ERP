@@ -16,7 +16,7 @@ import StudentAcademicHistory from "./StudentAcademicHistory";
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version || '3.11.174'}/pdf.worker.min.js`;
 
 export default function AdminDashboard({ onLogout }) {
-  const [activeTab, setActiveTab] = useState("halltickets"); 
+  const [activeTab, setActiveTab] = useState("academic"); 
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const DEPARTMENTS = ["CSE", "IT", "ECE", "EEE", "AIDS", "MECH", "CIVIL", "AERO","CSBS","BIOTECH"];
@@ -28,8 +28,14 @@ export default function AdminDashboard({ onLogout }) {
   const [uploadRole, setUploadRole] = useState("student");
   const [calcDept, setCalcDept] = useState("CSE"); 
   const [calcSem, setCalcSem] = useState("3");
-  const [manualDept, setManualDept] = useState("CSE"); 
-  const [manualSem, setManualSem] = useState("3");
+
+  // Promotion Engine States
+  const [promoDept, setPromoDept] = useState("ALL");
+  const [promoSem, setPromoSem] = useState("ALL");
+  const [showPromoteModal, setShowPromoteModal] = useState(false);
+  const [promotePassword, setPromotePassword] = useState("");
+  const [promoteError, setPromoteError] = useState("");
+  const [promoteLoading, setPromoteLoading] = useState(false);
 
   const [gridType, setGridType] = useState("internal"); 
   const [gridPaperType, setGridPaperType] = useState("THEORY");
@@ -38,11 +44,6 @@ export default function AdminDashboard({ onLogout }) {
   const [uploadFormat, setUploadFormat] = useState("EXCEL");
   const [ocrText, setOcrText] = useState("");
   const [showOcrModal, setShowOcrModal] = useState(false);
-
-  const [manualUploadFormat, setManualUploadFormat] = useState("EXCEL");
-  const [manualOcrText, setManualOcrText] = useState("");
-  const [showManualOcrModal, setShowManualOcrModal] = useState(false);
-  const [manualOcrSubject, setManualOcrSubject] = useState("");
 
   const [gridSubjectList, setGridSubjectList] = useState([]);
   const [gridSubject, setGridSubject] = useState("");
@@ -115,33 +116,14 @@ export default function AdminDashboard({ onLogout }) {
   const [settingsError, setSettingsError] = useState("");
   const [settingsSuccess, setSettingsSuccess] = useState("");
 
-  // ARREAR MANAGER STATE
-  const [arrearRecords, setArrearRecords] = useState([]);
-  const [arrearSettings, setArrearSettings] = useState({ internalValiditySemesters: 3, expiredInternalTheoryPassPercentage: 50.0 });
-  const [arrearPreviewData, setArrearPreviewData] = useState([]);
-  const [arrearErrors, setArrearErrors] = useState([]);
-  const [arrearWarnings, setArrearWarnings] = useState([]);
-  const [isValidArrearUpload, setIsValidArrearUpload] = useState(false);
-  const [arrearSearchRollNo, setArrearSearchRollNo] = useState("");
-  const [arrearSearchSubject, setArrearSearchSubject] = useState("");
-  const [arrearSearchDept, setArrearSearchDept] = useState("ALL");
-  const [arrearSearchStatus, setArrearSearchStatus] = useState("");
-  const [selectedRecordForOverride, setSelectedRecordForOverride] = useState(null);
-  const [overrideStatus, setOverrideStatus] = useState("VALID");
-  const [overrideReason, setOverrideReason] = useState("");
-  const [overrideExpiry, setOverrideExpiry] = useState("");
-  const [arrearActiveSubView, setArrearActiveSubView] = useState("dashboard"); // "dashboard", "student", "subject"
-  const [selectedStudentForView, setSelectedStudentForView] = useState("");
-  const [selectedSubjectForView, setSelectedSubjectForView] = useState("");
+
 
   const deptRef = useRef(dept); 
-  const manualDeptRef = useRef(manualDept); 
-  const manualSemRef = useRef(manualSem);   
 
   useEffect(() => { 
-    deptRef.current = dept; manualDeptRef.current = manualDept; manualSemRef.current = manualSem; 
+    deptRef.current = dept; 
     setPreviewData([]); setMessage(""); 
-  }, [dept, sem, activeTab, calcDept, calcSem, manualDept, manualSem]);
+  }, [dept, sem, activeTab, calcDept, calcSem]);
 
   useEffect(() => {
     if (activeTab === "grid" && gridType === "internal") {
@@ -163,145 +145,7 @@ export default function AdminDashboard({ onLogout }) {
     if (activeTab === "profiles") fetchProfiles();
   }, [activeTab, qPaperSubTab]);
 
-  useEffect(() => {
-    if (activeTab === "arrear_manager") {
-      fetchArrearSettings();
-      fetchArrearRecords();
-    }
-  }, [activeTab, arrearSearchRollNo, arrearSearchSubject, arrearSearchDept, arrearSearchStatus]);
 
-  const fetchArrearSettings = () => {
-    fetch(`${API_BASE}/api/arrears/settings`)
-      .then(res => res.ok ? res.json() : null)
-      .then(data => { if(data) setArrearSettings(data); })
-      .catch(e => console.error("Error fetching arrear settings", e));
-  };
-
-  const fetchArrearRecords = () => {
-    let url = `${API_BASE}/api/arrears/records?rollNo=${arrearSearchRollNo}&subjectCode=${arrearSearchSubject}&department=${arrearSearchDept}&status=${arrearSearchStatus}`;
-    fetch(url)
-      .then(res => res.ok ? res.json() : [])
-      .then(data => setArrearRecords(Array.isArray(data) ? data : []))
-      .catch(e => console.error("Error fetching arrear records", e));
-  };
-
-  const handleUpdateArrearSettings = (e) => {
-    e.preventDefault();
-    fetch(`${API_BASE}/api/arrears/settings`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(arrearSettings)
-    })
-      .then(res => res.ok ? res.json() : Promise.reject())
-      .then(() => {
-        setMessage("🎉 Arrear Settings updated successfully!");
-        fetchArrearSettings();
-        fetchArrearRecords();
-      })
-      .catch(() => setMessage("❌ Failed to update Arrear Settings"));
-  };
-
-  const handleDownloadArrearTemplate = () => {
-    const ws = XLSX.utils.json_to_sheet([
-      { "Roll No": "112721104001", "Subject Code": "CS3451", "Original Semester": 3, "Internal Mark": 17.5 }
-    ]);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Arrear Internals Template");
-    XLSX.writeFile(wb, "Arrear_Internals_Template.xlsx");
-  };
-
-  const handleArrearExcelUpload = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    readFirstSheet(file, (rows) => {
-      setLoading(true);
-      fetch(`${API_BASE}/api/arrears/validate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(rows)
-      })
-        .then(res => res.ok ? res.json() : Promise.reject("Validation failed"))
-        .then(data => {
-          setArrearPreviewData(data.preview || []);
-          setArrearErrors(data.errors || []);
-          setArrearWarnings(data.warnings || []);
-          setIsValidArrearUpload(data.valid);
-          if (data.valid) {
-            setMessage("✅ Excel validation passed. Review preview and confirm.");
-          } else {
-            setMessage("⚠️ Excel validation failed. Please check errors.");
-          }
-        })
-        .catch(err => {
-          setMessage(`❌ Upload Error: ${err}`);
-        })
-        .finally(() => setLoading(false));
-    });
-  };
-
-  const handleConfirmArrearSave = () => {
-    if (arrearPreviewData.length === 0) return;
-    setLoading(true);
-    fetch(`${API_BASE}/api/arrears/save`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(arrearPreviewData)
-    })
-      .then(res => res.ok ? res.json() : Promise.reject("Save failed"))
-      .then(data => {
-        setMessage(`🎉 ${data.message}`);
-        setArrearPreviewData([]);
-        setArrearErrors([]);
-        setArrearWarnings([]);
-        setIsValidArrearUpload(false);
-        fetchArrearRecords();
-      })
-      .catch(err => setMessage(`❌ Save Error: ${err}`))
-      .finally(() => setLoading(false));
-  };
-
-  const handleSaveOverride = (e) => {
-    e.preventDefault();
-    if (!selectedRecordForOverride) return;
-    fetch(`${API_BASE}/api/arrears/override`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        registerNumber: selectedRecordForOverride.registerNumber,
-        subjectCode: selectedRecordForOverride.subjectCode,
-        status: overrideStatus,
-        reason: overrideReason,
-        overrideExpirySem: overrideExpiry ? parseInt(overrideExpiry) : null
-      })
-    })
-      .then(res => res.ok ? res.json() : Promise.reject())
-      .then(data => {
-        setMessage(`🎉 Override updated: ${data.message}`);
-        setSelectedRecordForOverride(null);
-        setOverrideReason("");
-        setOverrideExpiry("");
-        fetchArrearRecords();
-      })
-      .catch(() => setMessage("❌ Failed to apply override"));
-  };
-
-  const handleRemoveOverride = (rec) => {
-    if (!confirm("Are you sure you want to remove this override?")) return;
-    fetch(`${API_BASE}/api/arrears/remove-override`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        registerNumber: rec.registerNumber,
-        subjectCode: rec.subjectCode
-      })
-    })
-      .then(res => res.ok ? res.json() : Promise.reject())
-      .then(() => {
-        setMessage("🎉 Override removed successfully.");
-        fetchArrearRecords();
-      })
-      .catch(() => setMessage("❌ Failed to remove override"));
-  };
 
   const fetchProfiles = async () => {
      try {
@@ -483,7 +327,8 @@ export default function AdminDashboard({ onLogout }) {
       const data = await res.json();
       if (res.ok) {
         setMessage(`🗑️ ${data.message}`);
-        setSbList(prev => prev.filter(s => !(s.subjectCode === subjectCode && s.department === department)));
+        setSbList(prev => prev.filter(s => !(s.subjectCode === subjectCode && (s.department === department || department === "ALL"))));
+        fetchAllSubjects();
       } else {
         setMessage(`❌ ${data.detail || "Delete failed"}`);
       }
@@ -771,19 +616,74 @@ export default function AdminDashboard({ onLogout }) {
       apiPost("/api/import/external", payload);
     });
   };
-  const handleCalculate = () => { apiPost("/api/import/calculate-results", {}); };
+  const handleCalculate = async () => {
+    setMessage(`⚙️ Running Calculation Engine for ${calcDept} Sem ${calcSem}...`);
+    try {
+      const res = await fetch(`${API_BASE}/api/import/calculate-results?department=${calcDept}&semester=${calcSem}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ semester: calcSem, department: calcDept })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setMessage(`✅ ${data.message || "Results calculated successfully!"}`);
+        handlePreview(calcSem, calcDept);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setMessage(`❌ Error: ${err.detail || "Calculation failed"}`);
+      }
+    } catch (e) {
+      setMessage("❌ Network error running calculation engine.");
+    }
+  };
   const handlePreview = async (targetSem, targetDept) => { setLoadingPreview(true); setPreviewData([]); try { const res = await fetch(`${API_BASE}/api/import/preview?semester=${targetSem}&department=${targetDept}&_t=${Date.now()}`); if(res.ok) { const data = await res.json(); setPreviewData(data); if(data.length > 0) setMessage(`✅ Loaded ${data.length} results.`); else setMessage(`⚠️ No results found for ${targetDept} Sem ${targetSem}.`); } } catch(err) { setMessage("❌ Error fetching preview"); } setLoadingPreview(false); };
   const handlePublish = async (targetSem, targetDept) => { if(!confirm(`Are you sure you want to PUBLISH results for ${targetDept} Sem ${targetSem}?`)) return; try { const res = await fetch(`${API_BASE}/api/import/publish?semester=${targetSem}&department=${targetDept}`, { method: "POST" }); const text = await res.text(); setMessage(res.ok ? "🎉 " + text : "❌ Publish failed"); handlePreview(targetSem, targetDept); } catch(err) { setMessage("❌ Error publishing"); } };
   const handleDropDrafts = async (targetSem, targetDept) => { if(!confirm(`⚠️ DELETE all unpublished drafts for ${targetDept} Sem ${targetSem}?`)) return; try { const res = await fetch(`${API_BASE}/api/import/drop-drafts?semester=${targetSem}&department=${targetDept}`, { method: "DELETE" }); if(res.ok) { setMessage("✅ Drafts Deleted."); setPreviewData([]); } } catch(err) { setMessage("❌ Error dropping drafts"); } };
   const handleDownload = () => { const ws = XLSX.utils.json_to_sheet(previewData); const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Draft Results"); XLSX.writeFile(wb, `Results_Draft.xlsx`); };
   const handleUnpublishLive = async (targetSem, targetDept) => { if(!confirm(`🚨 DANGER: Are you sure you want to DROP/UNPUBLISH the LIVE results for ${targetDept} Sem ${targetSem}?`)) return; try { const res = await fetch(`${API_BASE}/api/import/unpublish?semester=${targetSem}&department=${targetDept}`, { method: "DELETE" }); if(res.ok) { setMessage(`✅ Successfully dropped live results for ${targetDept} Semester ${targetSem}.`); } else { const text = await res.text(); setMessage(`❌ Error unpublishing: ${text}`); } } catch(err) { setMessage("❌ Network error dropping live results."); } };
-  const handlePromote = async (targetDept, targetSem) => { if(!confirm(`⚠️ PROMOTION: Are you sure you want to promote all ${targetDept} Semester ${targetSem} students to the next stage?`)) return; setLoading(true); try { const res = await fetch(`${API_BASE}/api/import/promote-students?department=${targetDept}&currentSemester=${targetSem}`, { method: "POST" }); const data = await res.json(); if(res.ok) setMessage(`🎉 Success: ${data.message}`); else setMessage(`❌ Error: ${data.error || "Promotion failed"}`); } catch (err) { setMessage("❌ Network error during promotion."); } setLoading(false); };
+  const openPromoteModal = () => {
+    setPromotePassword("");
+    setPromoteError("");
+    setShowPromoteModal(true);
+  };
+
+  const handleExecutePromotion = async (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+    if (!promotePassword.trim()) {
+      setPromoteError("Admin password is required to run promotion.");
+      return;
+    }
+    setPromoteLoading(true);
+    setPromoteError("");
+    try {
+      const res = await fetch(`${API_BASE}/api/import/promote-students`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          department: promoDept,
+          currentSemester: promoSem,
+          adminPassword: promotePassword.trim()
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setMessage(`🎉 ${data.message || "Students promoted successfully!"}`);
+        setShowPromoteModal(false);
+        setPromotePassword("");
+        if (activeTab === "profiles") fetchProfiles();
+      } else {
+        const err = data.detail?.error || data.detail || data.error || data.message || "Promotion failed";
+        setPromoteError(err);
+      }
+    } catch (err) {
+      setPromoteError(err.message || "Network error during promotion.");
+    } finally {
+      setPromoteLoading(false);
+    }
+  };
   const handleDeletePaper = async (id) => { if (!confirm("⚠️ Are you sure you want to permanently delete this question paper?")) return; setLoading(true); try { const res = await fetch(`${API_BASE}/api/import/question-paper/${id}`, { method: "DELETE" }); const data = await res.json(); if (res.ok) { setMessage(`✅ Success: ${data.message}`); setSavedPapers(prev => prev.filter(paper => paper.id !== id)); } else { setMessage(`❌ Error: ${data.error}`); } } catch (err) { setMessage("❌ Network error during deletion."); } setLoading(false); };
   const handleSmartScanUpload = async (e) => { const file = e.target.files[0]; if (!file) return; if (file.type === "application/pdf") { alert("⚠️ The AI Scanner requires an Image file (PNG/JPG). Please take a screenshot of your PDF and upload the image!"); return; } setLoading(true); setMessage("🔍 Document AI is scanning your image... This may take a moment."); setShowOcrModal(true); try { const result = await Tesseract.recognize(file, 'eng', { logger: m => console.log(m) }); setOcrText(result.data.text); setMessage("✅ Smart Scan complete. Please verify the extracted text below."); } catch (err) { setMessage("❌ OCR Failed. Make sure the image is clear, or try a different file."); setShowOcrModal(false); } setLoading(false); };
   const parseOcrDataToDB = () => { const currentDept = deptRef.current; const currentSem = String(sem); const lines = ocrText.split('\n'); const finalPayload = []; const regex = /(1127\d{8}|[A-Z0-9]{10,14}).*?(\d{1,3})/i; lines.forEach(line => { const match = line.match(regex); if (match) { const regNo = match[1].toUpperCase(); const mark = parseInt(match[2]); if (mark <= 100) { finalPayload.push({ registerNumber: regNo, subjectCode: selectedSubject || "SCANNED", semester: currentSem, grade: mark >= 50 ? "PASS" : "FAIL", result: mark >= 50 ? "PASS" : "FAIL", mark: String(mark), department: currentDept }); } } }); if (finalPayload.length === 0) { alert("⚠️ Could not find valid Register Numbers and Marks in the text."); return; } if(!confirm(`📢 SCANNED UPLOAD:\nFound ${finalPayload.length} valid students.\nClick OK to upload directly to Drafts.`)) return; apiPost("/api/import/results", finalPayload).then((success) => { if(success) { setShowOcrModal(false); setTimeout(() => handlePreview(currentSem, currentDept), 1500); } }); };
-  const handleManualSmartScanUpload = async (e) => { const file = e.target.files[0]; if (!file) return; if (file.type === "application/pdf") { alert("⚠️ You uploaded a PDF. Please change the Dropdown above to 'Native PDF' instead of 'AI Smart Scan'!"); return; } setLoading(true); setMessage("🔍 Document AI is scanning your image... This may take a moment."); setShowManualOcrModal(true); try { const result = await Tesseract.recognize(file, 'eng', { logger: m => console.log(m) }); setManualOcrText(result.data.text); setMessage("✅ Smart Scan complete. Please verify the extracted grades below."); } catch (err) { setMessage("❌ OCR Failed. Make sure the image is clear."); setShowManualOcrModal(false); } setLoading(false); };
-  const parseManualOcrDataToDB = () => { const currentDept = manualDeptRef.current; const currentSem = String(manualSemRef.current); const lines = manualOcrText.split('\n'); const finalPayload = []; let globalRegNo = null; lines.forEach(line => { const rMatch = line.match(/\b(1127\d{8}|[A-Z0-9]{10,14})\b/i); if (rMatch && !globalRegNo) globalRegNo = rMatch[1].toUpperCase(); }); lines.forEach(line => { const regMatch = line.match(/\b(1127\d{8}|[A-Z0-9]{10,14})\b/i); const subjMatch = line.match(/\b([A-Z]{2,3}\d{4,5})\b/i); const gradesRegex = /\b(O|0|Ο|A\+|A|B\+|B|C|U|RA|AB|SA|W|FAIL|PASS)\b/ig; let grades = []; let match; while ((match = gradesRegex.exec(line)) !== null) { grades.push(match[1].toUpperCase().replace(/0|Ο/g, 'O')); } if (grades.length > 0) { const gradeVal = grades[grades.length - 1]; const isFail = ["U", "RA", "AB", "FAIL", "F", "ABSENT", "WH", "W", "SA"].includes(gradeVal); if (subjMatch && globalRegNo) { const subjCode = subjMatch[1].toUpperCase(); if (!finalPayload.some(p => p.registerNumber === globalRegNo && p.subjectCode === subjCode)) { finalPayload.push({ registerNumber: globalRegNo, subjectCode: subjCode, semester: currentSem, grade: gradeVal, result: isFail ? "FAIL" : "PASS", mark: "0", department: currentDept }); } } else if (regMatch && manualOcrSubject) { const regNo = regMatch[1].toUpperCase(); if (!finalPayload.some(p => p.registerNumber === regNo && p.subjectCode === manualOcrSubject)) { finalPayload.push({ registerNumber: regNo, subjectCode: manualOcrSubject.trim().toUpperCase(), semester: currentSem, grade: gradeVal, result: isFail ? "FAIL" : "PASS", mark: "0", department: currentDept }); } } } }); if (finalPayload.length === 0) { alert("⚠️ Could not find valid grades in the text."); return; } if(!confirm(`📢 SCANNED MANUAL UPLOAD:\nTarget Dept: ${currentDept}\nTarget Sem: ${currentSem}\nFound ${finalPayload.length} valid grades.\nClick OK to upload to Drafts.`)) return; apiPost("/api/import/results", finalPayload).then((success) => { if(success) { setShowManualOcrModal(false); setTimeout(() => handlePreview(currentSem, currentDept), 1500); } }); };
-  const handleManualPDFUpload = async (e) => { const file = e.target.files[0]; if (!file) return; setLoading(true); setMessage("📄 Extracting text and mapping grades from PDF... Please wait."); try { const arrayBuffer = await file.arrayBuffer(); const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise; let allLines = []; for (let i = 1; i <= pdf.numPages; i++) { const page = await pdf.getPage(i); const content = await page.getTextContent(); const itemsByY = {}; content.items.forEach(item => { const y = Math.round(item.transform[5]); let targetY = y; for (let existingY in itemsByY) { if (Math.abs(existingY - y) < 5) { targetY = existingY; break; } } if (!itemsByY[targetY]) itemsByY[targetY] = []; itemsByY[targetY].push(item); }); const yCoords = Object.keys(itemsByY).sort((a, b) => b - a); yCoords.forEach(y => { const lineItems = itemsByY[y].sort((a, b) => a.transform[4] - b.transform[4]); const lineText = lineItems.map(item => item.str.trim()).filter(str => str.length > 0).join(" "); if (lineText) allLines.push(lineText); }); } const currentDept = manualDeptRef.current; const currentSem = String(manualSemRef.current); const finalPayload = []; let currentSubjects = []; allLines.forEach(line => { const subjectMatches = line.match(/\b[A-Z]{2,3}\d{4,5}\b/g); if (subjectMatches && subjectMatches.length >= 2) { currentSubjects = subjectMatches; } const regMatch = line.match(/\b(1127\d{8}|[A-Z0-9]{10,14})\b/); if (regMatch && currentSubjects.length > 0) { const regNo = regMatch[1].toUpperCase(); const afterRegNo = line.substring(line.indexOf(regNo) + regNo.length); const gradeRegex = /\b(O|0|Ο|A\+|A|B\+|B|C|U|RA|AB|SA|W|WH\d*)\b/g; const grades = []; let gMatch; while ((gMatch = gradeRegex.exec(afterRegNo)) !== null) { grades.push(gMatch[1].toUpperCase().replace(/0|Ο/g, 'O')); } const validGrades = grades.slice(-currentSubjects.length); for(let i = 0; i < Math.min(validGrades.length, currentSubjects.length); i++) { const gradeVal = validGrades[i]; const isFail = ["U", "RA", "AB", "FAIL", "F", "ABSENT", "WH", "WH1", "W", "SA"].includes(gradeVal); finalPayload.push({ registerNumber: regNo, subjectCode: currentSubjects[i], semester: currentSem, grade: gradeVal, result: isFail ? "FAIL" : "PASS", mark: "0", department: currentDept }); } } }); if (finalPayload.length === 0) { alert("⚠️ Could not find valid Students and Subjects in this PDF."); setLoading(false); return; } if(!confirm(`📢 PDF PROCESSED:\nTarget Dept: ${currentDept}\nTarget Sem: ${currentSem}\nMapped ${finalPayload.length} total grades from the PDF.\nClick OK to upload to Drafts.`)) { setLoading(false); return; } apiPost("/api/import/results", finalPayload).then((success) => { if(success) { setTimeout(() => handlePreview(currentSem, currentDept), 1500); } }); } catch (err) { console.error(err); setMessage("❌ Failed to process PDF. Is it password protected?"); } setLoading(false); };
   const handleCustomTemplateUpload = (e) => { const file = e.target.files[0]; if(!file) return; readFirstSheet(file, (rows) => { if(rows.length > 0) { const originalHeaders = Object.keys(rows[0]).filter(k => k.toLowerCase() !== "registernumber" && k.toLowerCase() !== "name"); setCustomCols(originalHeaders); const resetData = gridData.map(s => { const newStudent = { registerNumber: s.registerNumber, name: s.name }; originalHeaders.forEach(h => newStudent[h] = ""); return newStudent; }); setGridData(resetData); setMessage("✅ Custom Grid Template Loaded! You can now start entering data."); } }); };  const handleUpdatePassword = async (e) => {
     e.preventDefault();
     setSettingsError("");
@@ -1271,14 +1171,13 @@ export default function AdminDashboard({ onLogout }) {
           <button onClick={() => setActiveTab("qpapers")} className={`pb-2 px-4 font-bold transition-colors ${activeTab === "qpapers" ? "border-b-2 border-purple-600 text-purple-700" : "text-gray-500 hover:text-purple-700"}`}>1. Question Papers</button>
           <button onClick={() => setActiveTab("setup")} className={`pb-2 px-4 font-medium transition-colors ${activeTab === "setup" ? "border-b-2 border-indigo-600 text-indigo-600" : "text-gray-500"}`}>2. Setup</button>
           <button onClick={() => setActiveTab("excel")} className={`pb-2 px-4 font-medium transition-colors ${activeTab === "excel" ? "border-b-2 border-indigo-600 text-indigo-600" : "text-gray-500"}`}>3. Excel Uploads</button>
-          <button onClick={() => setActiveTab("process")} className={`pb-2 px-4 font-medium transition-colors ${activeTab === "process" ? "border-b-2 border-indigo-600 text-indigo-600" : "text-gray-500"}`}>4. Calculate</button>
-          <button onClick={() => setActiveTab("manual")} className={`pb-2 px-4 font-bold transition-colors ${activeTab === "manual" ? "border-b-2 border-orange-500 text-orange-600" : "text-gray-500 hover:text-orange-600"}`}>5. Final Override</button>
-          <button onClick={() => setActiveTab("manage")} className={`pb-2 px-4 font-bold transition-colors ${activeTab === "manage" ? "border-b-2 border-red-600 text-red-600" : "text-gray-500 hover:text-red-600"}`}>6. Manage Live</button>
-          <button onClick={() => setActiveTab("halltickets")} className={`pb-2 px-4 font-bold transition-colors ${activeTab === "halltickets" ? "border-b-2 border-pink-600 text-pink-700" : "text-gray-500 hover:text-pink-700"}`}>7. Hall Tickets</button>
-          <button onClick={() => setActiveTab("gpa")} className={`pb-2 px-4 font-bold transition-colors ${activeTab === "gpa" ? "border-b-2 border-indigo-600 text-indigo-700" : "text-gray-500 hover:text-indigo-700"}`}>8. GPA Calc</button>
-          <button onClick={() => setActiveTab("profiles")} className={`pb-2 px-4 font-bold transition-colors ${activeTab === "profiles" ? "border-b-2 border-blue-600 text-blue-700" : "text-gray-500 hover:text-blue-700"}`}>9. Profiles</button>
-          <button onClick={() => setActiveTab("arrear_manager")} className={`pb-2 px-4 font-bold transition-colors ${activeTab === "arrear_manager" ? "border-b-2 border-rose-600 text-rose-700" : "text-gray-500 hover:text-rose-700"}`}>🚨 Arrear Manager</button>
-          <button onClick={() => setActiveTab("settings")} className={`pb-2 px-4 font-bold transition-colors ${activeTab === "settings" ? "border-b-2 border-slate-600 text-slate-700" : "text-gray-500 hover:text-slate-700"}`}>10. Settings</button>
+          <button onClick={() => setActiveTab("process")} className={`pb-2 px-4 font-bold transition-colors ${activeTab === "process" ? "border-b-2 border-indigo-600 text-indigo-700" : "text-gray-500 hover:text-indigo-700"}`}>4. Calculate & Publish</button>
+          <button onClick={() => setActiveTab("manage")} className={`pb-2 px-4 font-bold transition-colors ${activeTab === "manage" ? "border-b-2 border-red-600 text-red-600" : "text-gray-500 hover:text-red-600"}`}>5. Manage Live</button>
+          <button onClick={() => setActiveTab("halltickets")} className={`pb-2 px-4 font-bold transition-colors ${activeTab === "halltickets" ? "border-b-2 border-pink-600 text-pink-700" : "text-gray-500 hover:text-pink-700"}`}>6. Hall Tickets</button>
+          <button onClick={() => setActiveTab("gpa")} className={`pb-2 px-4 font-bold transition-colors ${activeTab === "gpa" ? "border-b-2 border-indigo-600 text-indigo-700" : "text-gray-500 hover:text-indigo-700"}`}>7. GPA Calc</button>
+          <button onClick={() => setActiveTab("profiles")} className={`pb-2 px-4 font-bold transition-colors ${activeTab === "profiles" ? "border-b-2 border-blue-600 text-blue-700" : "text-gray-500 hover:text-blue-700"}`}>8. Profiles</button>
+
+          <button onClick={() => setActiveTab("settings")} className={`pb-2 px-4 font-bold transition-colors ${activeTab === "settings" ? "border-b-2 border-slate-600 text-slate-700" : "text-gray-500 hover:text-slate-700"}`}>9. Settings</button>
         </div>
 
         <AnimatePresence>{message && <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className={`p-4 rounded-md mb-6 text-sm font-medium shadow-sm ${message.startsWith("✅") || message.startsWith("🎉") ? "bg-green-50 text-green-700 border border-green-200" : "bg-red-50 text-red-700 border border-red-200"}`}>{message}</motion.div>}</AnimatePresence>
@@ -1904,24 +1803,62 @@ export default function AdminDashboard({ onLogout }) {
                   />
                 </div>
               </div>
-              <div className="bg-indigo-50 p-6 rounded-xl shadow-sm border border-indigo-100 col-span-1 md:col-span-2">
-                <h3 className="font-bold text-lg mb-2 text-indigo-800">🎓 Semester Promotion Engine</h3>
-                <p className="text-sm text-indigo-600 mb-4">Automatically move all students up one semester. Semester 8 students will be marked as <b>Graduated</b>.</p>
-                <div className="flex flex-wrap gap-4 items-center mb-4">
-                  <div>
-                    <label className="block text-xs font-bold text-indigo-700 uppercase mb-1">Department</label>
-                    <select value={dept} onChange={(e) => setDept(e.target.value)} className="p-2 border border-indigo-200 rounded-md outline-none bg-white text-sm font-semibold text-gray-700">
+              <div className="bg-gradient-to-br from-indigo-50 via-white to-purple-50 p-6 rounded-xl shadow-sm border border-indigo-100 col-span-1 md:col-span-2">
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                  <h3 className="font-bold text-lg text-indigo-900 flex items-center gap-2">
+                    <span>🎓</span> Semester Promotion Engine
+                  </h3>
+                  <span className="text-[11px] font-semibold bg-indigo-100 text-indigo-800 px-2.5 py-1 rounded-full border border-indigo-200">
+                    🔒 Requires Admin Password
+                  </span>
+                </div>
+                <p className="text-sm text-indigo-700/80 mb-4">
+                  Automatically move all students up one semester. Semester 8 students will be marked as <b className="text-indigo-900">Graduated (Semester 99)</b>. Choose a specific department/semester or promote all at once.
+                </p>
+                <div className="flex flex-wrap gap-4 items-center mb-5">
+                  <div className="min-w-[180px]">
+                    <label className="block text-xs font-bold text-indigo-700 uppercase tracking-wide mb-1.5">Department</label>
+                    <select
+                      value={promoDept}
+                      onChange={(e) => setPromoDept(e.target.value)}
+                      className="w-full p-2.5 border border-indigo-200 rounded-lg outline-none bg-white text-sm font-semibold text-gray-800 shadow-sm focus:ring-2 focus:ring-indigo-400"
+                    >
+                      <option value="ALL">🌐 All Departments</option>
                       {DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}
                     </select>
                   </div>
-                  <div>
-                    <label className="block text-xs font-bold text-indigo-700 uppercase mb-1">Semester</label>
-                    <select value={sem} onChange={(e) => setSem(e.target.value)} className="p-2 border border-indigo-200 rounded-md outline-none bg-white text-sm font-semibold text-gray-700">
-                      {[1, 2, 3, 4, 5, 6, 7, 8, 99].map((n) => <option key={n} value={n}>{n === 99 ? "Graduated 🎓" : `Semester ${n}`}</option>)}
+                  <div className="min-w-[180px]">
+                    <label className="block text-xs font-bold text-indigo-700 uppercase tracking-wide mb-1.5">Semester</label>
+                    <select
+                      value={promoSem}
+                      onChange={(e) => setPromoSem(e.target.value)}
+                      className="w-full p-2.5 border border-indigo-200 rounded-lg outline-none bg-white text-sm font-semibold text-gray-800 shadow-sm focus:ring-2 focus:ring-indigo-400"
+                    >
+                      <option value="ALL">⚡ All Semesters (Sem 1 - 8)</option>
+                      {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
+                        <option key={n} value={n}>
+                          {n === 8 ? `Semester 8 🎓 (to Graduated)` : `Semester ${n}`}
+                        </option>
+                      ))}
                     </select>
                   </div>
                 </div>
-                <button onClick={() => handlePromote(dept, sem)} disabled={loading || Number(sem) === 99} className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-lg shadow-md transition-all active:scale-95 flex items-center gap-2 disabled:bg-gray-400"><span>📈</span> Run Promotion for {dept} Sem {sem}</button>
+                <button
+                  onClick={openPromoteModal}
+                  disabled={loading || promoteLoading}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-lg shadow-md hover:shadow-lg transition-all active:scale-95 flex items-center gap-2.5 disabled:bg-gray-400 cursor-pointer"
+                >
+                  <span>📈</span>
+                  <span>
+                    {promoDept === "ALL" && promoSem === "ALL"
+                      ? "Run Promotion for All Departments & All Semesters"
+                      : promoDept === "ALL"
+                      ? `Run Promotion for All Departments (Sem ${promoSem})`
+                      : promoSem === "ALL"
+                      ? `Run Promotion for ${promoDept} (All Semesters)`
+                      : `Run Promotion for ${promoDept} Sem ${promoSem}`}
+                  </span>
+                </button>
               </div>
             </div>
 
@@ -2033,7 +1970,7 @@ export default function AdminDashboard({ onLogout }) {
                             <td className="px-4 py-3 font-bold text-indigo-700 font-mono">{s.subjectCode}</td>
                             <td className="px-4 py-3 text-gray-800">{s.subjectName}</td>
                             <td className="px-4 py-3 text-center">
-                              <span className="bg-blue-100 text-blue-800 text-xs font-bold px-2 py-0.5 rounded">{s.department}</span>
+                              <span className="bg-blue-100 text-blue-800 text-xs font-bold px-2 py-0.5 rounded">{s.department || s.dept || "ALL"}</span>
                             </td>
                             <td className="px-4 py-3 text-center font-semibold text-gray-700">Sem {s.semester}</td>
                             <td className="px-4 py-3 text-center font-semibold text-xs"><span className="bg-amber-100 text-amber-800 px-2 py-0.5 rounded font-bold">{s.regulation || "—"}</span></td>
@@ -2091,72 +2028,156 @@ export default function AdminDashboard({ onLogout }) {
           </motion.div>
         )}
 
-        {/* 4. PROCESS TAB */}
-        {activeTab === "process" && (<motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6"><div className="bg-white p-8 rounded-xl shadow-sm border border-gray-100 flex items-center justify-between"><div><h3 className="font-bold text-xl text-indigo-800">Run Calculation Engine</h3><p className="text-sm text-gray-500 mt-1">Merges Internal + External marks from the database into final Grades.</p></div><button onClick={handleCalculate} className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-4 rounded-lg font-bold shadow-lg transition-transform active:scale-95">⚙️ Calculate Results</button></div><div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100"><h4 className="font-bold text-gray-700 mb-3 text-sm uppercase">Preview & Publish</h4><div className="flex flex-wrap gap-4 items-center mb-4"><div className="flex items-center gap-2"><span className="text-sm font-medium text-gray-500">Dept:</span><select value={calcDept} onChange={(e) => setCalcDept(e.target.value)} className="border border-gray-300 rounded px-3 py-2 text-sm font-bold w-24 outline-none">{DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}</select></div><div className="flex items-center gap-2"><span className="text-sm font-medium text-gray-500">Sem:</span><select value={calcSem} onChange={(e) => setCalcSem(e.target.value)} className="border border-gray-300 rounded px-3 py-2 text-sm font-bold w-24 outline-none">{[1, 2, 3, 4, 5, 6, 7, 8, 99].map(n => <option key={n} value={n}>{n === 99 ? "Graduated 🎓" : `Semester ${n}`}</option>)}</select></div><button onClick={() => handlePreview(calcSem, calcDept)} disabled={loadingPreview} className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 rounded border border-gray-300 text-sm font-medium transition-colors">{loadingPreview ? "Loading..." : "Check Drafts"}</button>{previewData.length > 0 && (<div className="flex gap-2 ml-auto"><button onClick={handleDownload} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded font-bold shadow-md flex items-center gap-2"><span>📥</span> Download Draft</button><button onClick={() => handlePublish(calcSem, calcDept)} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded font-bold shadow-md flex items-center gap-2"><span>🚀</span> Publish Live</button></div>)}</div>{previewData.length > 0 && (<div className="overflow-hidden border border-gray-200 rounded-lg"><div className="max-h-[500px] overflow-y-auto"><table className="w-full text-sm text-left"><thead className="bg-gray-50 text-gray-600 uppercase text-xs font-bold sticky top-0 shadow-sm z-10"><tr><th className="px-4 py-3 bg-gray-50">Register No</th><th className="px-4 py-3 bg-gray-50">Subject</th><th className="px-4 py-3 text-center bg-gray-50">Marks</th><th className="px-4 py-3 text-center bg-gray-50">Grade</th><th className="px-4 py-3 text-center bg-gray-50">Status</th></tr></thead><tbody className="divide-y divide-gray-100">{previewData.map((r, i) => (<tr key={i} className="hover:bg-gray-50"><td className="px-4 py-2 font-mono text-gray-600">{r.registerNumber}</td><td className="px-4 py-2">{r.subjectCode}</td><td className="px-4 py-2 text-center">{r.finalMarks}</td><td className="px-4 py-2 text-center font-bold text-blue-600">{r.grade}</td><td className="px-4 py-2 text-center"><span className={`px-2 py-1 rounded text-xs font-bold ${r.result === "PASS" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>{r.result}</span></td></tr>))}</tbody></table></div></div>)}</div></motion.div>)}
-        
-        {/* 5. MANUAL OVERRIDE */}
-        {activeTab === "manual" && (
+        {/* 4. CALCULATE & PUBLISH TAB */}
+        {activeTab === "process" && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
-             <div className="bg-orange-50 p-8 rounded-xl shadow-sm border border-orange-200">
-               <div className="flex justify-between items-center mb-6">
-                 <h2 className="text-xl font-bold text-orange-800">Manual Result Override</h2>
-                 <select value={manualUploadFormat} onChange={e => setManualUploadFormat(e.target.value)} className="p-2 border border-orange-300 rounded-lg font-bold text-orange-700 bg-white outline-none">
-                     <option value="EXCEL">📄 Excel / CSV Document</option>
-                     <option value="PDF">📑 Native PDF (Whole Semester)</option>
-                     <option value="SCAN">📸 AI Smart Scan (Image OCR)</option>
-                 </select>
-               </div>
-               
-               <div className="grid grid-cols-2 gap-6 mb-6">
-                 <div><label className="block text-xs font-bold text-orange-700 uppercase mb-2">Target Department</label><select value={manualDept} onChange={(e) => setManualDept(e.target.value)} className="w-full p-3 border border-orange-300 rounded-lg font-bold text-gray-700 bg-white">{DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}</select></div>
-                 <div><label className="block text-xs font-bold text-orange-700 uppercase mb-2">Target Semester</label><select value={manualSem} onChange={(e) => setManualSem(e.target.value)} className="w-full p-3 border border-orange-300 rounded-lg font-bold text-gray-700 bg-white">{[1, 2, 3, 4, 5, 6, 7, 8, 99].map(n => <option key={n} value={n}>{n === 99 ? "Graduated 🎓" : `Semester ${n}`}</option>)}</select></div>
-               </div>
-               
-               {manualUploadFormat === "EXCEL" && (
-                   <div className="bg-white p-6 rounded-lg border border-orange-100 mb-6"><label className="block text-sm font-bold text-gray-600 mb-3">Upload Final Grade Sheet (Excel/CSV)</label><input type="file" onChange={(e) => {
-                      const file = e.target.files[0]; if (!file) return; const currentDept = manualDeptRef.current; const currentSem = String(manualSemRef.current);
-                      readFirstSheet(file, (rows) => {
-                        if (rows.length === 0) return; const firstRow = normalizeRowKeys(rows[0]); const isVertical = !!(firstRow.subject || firstRow.subjectcode || firstRow.code); let finalPayload = [];
-                        if (isVertical) { finalPayload = rows.map((r) => { const n = normalizeRowKeys(r); return { registerNumber: n.registerNumber || n.rollno || "", subjectCode: n.subjectcode || n.subject || "", semester: currentSem, grade: n.grade || "", result: n.result || "", mark: "0", department: currentDept }; }); } else { finalPayload = rows.flatMap((r) => { const n = normalizeRowKeys(r); const regNo = n.registerNumber || n.rollno; if (!regNo) return []; const ignoreKeys = ["registernumber", "rollno", "name", "sno", "serialno", "department", "semester", "dob", "password"]; return Object.keys(r).map(k => { const lowerKey = k.toLowerCase().trim().replace(/[^a-z0-9]/g, ""); if (ignoreKeys.includes(lowerKey)) return null; const gradeVal = String(r[k]).trim(); if (!gradeVal) return null; return { registerNumber: regNo, subjectCode: k.trim(), semester: currentSem, grade: gradeVal, result: ["U", "RA", "AB", "FAIL", "F", "ABSENT", "WH", "SA"].includes(gradeVal.toUpperCase()) ? "FAIL" : "PASS", mark: "0", department: currentDept }; }).filter(item => item !== null); }); }
-                        const validData = finalPayload.filter(x => x.registerNumber && x.subjectCode); if (validData.length === 0) { setMessage("⚠️ No valid data found."); return; } if(!confirm(`📢 MANUAL UPLOAD:\nTarget Dept: ${currentDept}\nTarget Sem: ${currentSem}\nRows Found: ${validData.length}\nClick OK to Upload.`)) return; apiPost("/api/import/results", validData).then((success) => { if(success) setTimeout(() => handlePreview(currentSem, currentDept), 1500); });
-                      });
-                   }} accept=".xlsx, .csv" className="block w-full text-sm text-slate-500 file:mr-4 file:py-2.5 file:px-6 file:rounded-full file:border-0 file:font-bold file:bg-orange-600 file:text-white hover:file:bg-orange-700 cursor-pointer" /></div>
-               )}
+            <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-100">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-gray-100">
+                <div>
+                  <h3 className="font-bold text-2xl text-indigo-900 flex items-center gap-2">
+                    <span>⚡</span> Calculate &amp; Publish Results
+                  </h3>
+                  <p className="text-sm text-gray-500 mt-1">
+                    Automatically computes student letter grades and grade points from merged Internal + External marks, with full Draft inspection, Drop, and Live Publishing controls.
+                  </p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div>
+                    <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1">Target Department</label>
+                    <select
+                      value={calcDept}
+                      onChange={(e) => setCalcDept(e.target.value)}
+                      className="border border-gray-300 rounded-lg px-3 py-2 text-sm font-bold text-gray-800 bg-white outline-none focus:ring-2 focus:ring-indigo-500"
+                    >
+                      {DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1">Target Semester</label>
+                    <select
+                      value={calcSem}
+                      onChange={(e) => setCalcSem(e.target.value)}
+                      className="border border-gray-300 rounded-lg px-3 py-2 text-sm font-bold text-gray-800 bg-white outline-none focus:ring-2 focus:ring-indigo-500"
+                    >
+                      {[1, 2, 3, 4, 5, 6, 7, 8, 99].map(n => <option key={n} value={n}>{n === 99 ? "Graduated 🎓" : `Semester ${n}`}</option>)}
+                    </select>
+                  </div>
+                </div>
+              </div>
 
-               {manualUploadFormat === "PDF" && (
-                   <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="bg-purple-50 p-6 rounded-xl border border-purple-200 mb-6">
-                        <h3 className="font-bold text-purple-900 mb-2">📑 Native PDF Extractor</h3>
-                        <p className="text-sm text-purple-700 mb-4">Upload the official whole-semester PDF from the University. The system will automatically map every student's row to the correct subject columns at the top of the page!</p>
-                        <input type="file" onChange={handleManualPDFUpload} accept="application/pdf" className="block w-full text-sm text-purple-700 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:bg-purple-600 file:text-white file:font-bold hover:file:bg-purple-700 cursor-pointer" />
-                   </motion.div>
-               )}
+              {/* Action Buttons: 1. Calculate Results, 2. Check Drafts, 3. Drop Results, 4. Publish Live */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-6">
+                <button
+                  onClick={handleCalculate}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white p-4 rounded-xl font-bold shadow-md hover:shadow-lg transition-all active:scale-95 flex flex-col items-center justify-center text-center gap-1.5"
+                >
+                  <span className="text-2xl">⚙️</span>
+                  <span className="text-sm">1. Calculate Results</span>
+                  <span className="text-[11px] text-indigo-100 font-normal">Auto-compute grades &amp; GP</span>
+                </button>
 
-               {manualUploadFormat === "SCAN" && (
-                   <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="bg-orange-100/50 p-6 rounded-xl border border-orange-200 mb-6">
-                        <h3 className="font-bold text-orange-900 mb-2">📸 Document AI (OCR) for Final Grades</h3>
-                        <p className="text-sm text-orange-700 mb-4">Upload a scanned image (PNG/JPG) of the final result sheet (e.g. mobile screenshot). The AI will extract Register Numbers and Letter Grades (O, A+, B, U, etc.) automatically.</p>
-                        <input type="file" onChange={handleManualSmartScanUpload} accept="image/*" className="block w-full text-sm text-orange-700 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:bg-orange-600 file:text-white file:font-bold hover:file:bg-orange-700 cursor-pointer" />
-                        
-                        {showManualOcrModal && (
-                            <div className="mt-6 p-4 bg-white rounded-lg border border-orange-200 shadow-sm">
-                                <h4 className="font-bold text-gray-700 mb-2">Raw Scanned Data</h4>
-                                <textarea value={manualOcrText} onChange={e => setManualOcrText(e.target.value)} className="w-full h-40 p-3 border border-gray-300 rounded text-sm font-mono text-gray-600 outline-none focus:border-orange-500" placeholder="Extracted text will appear here. You can manually edit it before saving..." />
-                                <div className="mt-4 flex gap-4">
-                                    <input type="text" placeholder="Subject Code (For Horizontal rows only)" value={manualOcrSubject} onChange={e => setManualOcrSubject(e.target.value)} className="border p-2 rounded flex-1 outline-none font-bold" />
-                                    <button onClick={parseManualOcrDataToDB} className="bg-green-600 text-white font-bold py-2 px-6 rounded shadow-md hover:bg-green-700">Send to Drafts</button>
-                                </div>
-                            </div>
-                        )}
-                   </motion.div>
-               )}
-               
-               <div className="flex gap-4">
-                 <button onClick={() => handlePreview(manualSem, manualDept)} className="flex-1 bg-white border border-orange-300 text-orange-700 font-bold py-3 rounded-lg hover:bg-orange-50 transition-colors shadow-sm">2. Check Drafts</button>
-                 <button onClick={() => handleDropDrafts(manualSem, manualDept)} className="flex-1 bg-red-100 border border-red-300 text-red-700 font-bold py-3 rounded-lg hover:bg-red-200 transition-colors shadow-sm">3. Drop Results</button>
-                 <button onClick={() => handlePublish(manualSem, manualDept)} className="flex-1 bg-green-600 text-white font-bold py-3 rounded-lg hover:bg-green-700 shadow-md transition-colors">4. Publish Live 🚀</button>
-               </div>
-             </div>
-             {previewData.length > 0 && (<div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden"><div className="px-6 py-4 border-b border-gray-100 bg-gray-50 flex justify-between items-center"><h3 className="font-bold text-gray-700">Draft Results Preview</h3><button onClick={handleDownload} className="text-indigo-600 text-sm font-bold hover:underline">Download Excel</button></div><div className="max-h-[500px] overflow-y-auto"><table className="w-full text-sm text-left"><thead className="bg-gray-100 text-gray-600 uppercase text-xs font-bold sticky top-0"><tr><th className="px-4 py-3">Register No</th><th className="px-4 py-3">Subject</th><th className="px-4 py-3 text-center">Grade</th><th className="px-4 py-3 text-center">Result</th></tr></thead><tbody className="divide-y divide-gray-100">{previewData.map((r, i) => (<tr key={i} className="hover:bg-gray-50"><td className="px-4 py-2 font-mono">{r.registerNumber}</td><td className="px-4 py-2">{r.subjectCode}</td><td className="px-4 py-2 text-center font-bold text-blue-600">{r.grade}</td><td className="px-4 py-2 text-center"><span className={`px-2 py-1 rounded text-xs font-bold ${r.result === "PASS" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>{r.result}</span></td></tr>))}</tbody></table></div></div>)}
+                <button
+                  onClick={() => handlePreview(calcSem, calcDept)}
+                  disabled={loadingPreview}
+                  className="bg-sky-600 hover:bg-sky-700 text-white p-4 rounded-xl font-bold shadow-md hover:shadow-lg transition-all active:scale-95 flex flex-col items-center justify-center text-center gap-1.5"
+                >
+                  <span className="text-2xl">📋</span>
+                  <span className="text-sm">{loadingPreview ? "Loading..." : "2. Check Drafts"}</span>
+                  <span className="text-[11px] text-sky-100 font-normal">Inspect calculated grades</span>
+                </button>
+
+                <button
+                  onClick={() => handleDropDrafts(calcSem, calcDept)}
+                  className="bg-rose-600 hover:bg-rose-700 text-white p-4 rounded-xl font-bold shadow-md hover:shadow-lg transition-all active:scale-95 flex flex-col items-center justify-center text-center gap-1.5"
+                >
+                  <span className="text-2xl">🗑️</span>
+                  <span className="text-sm">3. Drop Results</span>
+                  <span className="text-[11px] text-rose-100 font-normal">Delete draft entries</span>
+                </button>
+
+                <button
+                  onClick={() => handlePublish(calcSem, calcDept)}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white p-4 rounded-xl font-bold shadow-md hover:shadow-lg transition-all active:scale-95 flex flex-col items-center justify-center text-center gap-1.5"
+                >
+                  <span className="text-2xl">🚀</span>
+                  <span className="text-sm">4. Publish Live</span>
+                  <span className="text-[11px] text-emerald-100 font-normal">Make visible to students</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Draft Preview Table */}
+            {previewData.length > 0 && (
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                <div className="px-6 py-4 border-b border-gray-100 bg-gray-50 flex flex-wrap justify-between items-center gap-3">
+                  <div>
+                    <h4 className="font-bold text-gray-800 text-base">
+                      Draft Results Preview — {calcDept} Semester {calcSem}
+                    </h4>
+                    <p className="text-xs text-gray-500">Showing {previewData.length} student entries with auto-calculated grades</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleDownload}
+                      className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 px-4 py-2 rounded-lg text-xs font-bold shadow-sm flex items-center gap-1.5 transition-colors"
+                    >
+                      <span>📥</span> Download Excel
+                    </button>
+                    <button
+                      onClick={() => handlePublish(calcSem, calcDept)}
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-xs font-bold shadow-sm flex items-center gap-1.5 transition-colors"
+                    >
+                      <span>🚀</span> Publish Live Now
+                    </button>
+                  </div>
+                </div>
+                <div className="max-h-[500px] overflow-y-auto">
+                  <table className="w-full text-sm text-left">
+                    <thead className="bg-gray-100 text-gray-600 uppercase text-xs font-bold sticky top-0 shadow-sm z-10">
+                      <tr>
+                        <th className="px-4 py-3">Register No</th>
+                        <th className="px-4 py-3">Subject</th>
+                        <th className="px-3 py-3 text-center">Credits</th>
+                        <th className="px-3 py-3 text-center">Internal</th>
+                        <th className="px-3 py-3 text-center">External</th>
+                        <th className="px-3 py-3 text-center">Total</th>
+                        <th className="px-3 py-3 text-center">Grade</th>
+                        <th className="px-3 py-3 text-center">GP</th>
+                        <th className="px-3 py-3 text-center">Result</th>
+                        <th className="px-3 py-3 text-center">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {previewData.map((r, i) => (
+                        <tr key={i} className="hover:bg-indigo-50/40 transition-colors">
+                          <td className="px-4 py-2.5 font-mono text-gray-800 font-semibold">{r.registerNumber}</td>
+                          <td className="px-4 py-2.5">
+                            <span className="font-mono font-bold text-indigo-900">{r.subjectCode}</span>
+                            {r.subjectName && <span className="block text-xs text-gray-500 truncate max-w-xs">{r.subjectName}</span>}
+                          </td>
+                          <td className="px-3 py-2.5 text-center font-bold text-gray-600">{r.credits ?? 3}</td>
+                          <td className="px-3 py-2.5 text-center text-gray-600">{r.internalConverted ?? r.internalRaw ?? "—"}</td>
+                          <td className="px-3 py-2.5 text-center text-gray-600">{r.externalConverted ?? r.externalRaw ?? "—"}</td>
+                          <td className="px-3 py-2.5 text-center font-bold text-gray-800">{r.finalMarks ?? r.finalMarksDecimal ?? "—"}</td>
+                          <td className="px-3 py-2.5 text-center font-black text-indigo-700">{r.grade}</td>
+                          <td className="px-3 py-2.5 text-center font-bold text-gray-700">{r.gradePoint ?? "—"}</td>
+                          <td className="px-3 py-2.5 text-center">
+                            <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${r.result === "PASS" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
+                              {r.result}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2.5 text-center">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${r.arrearStatus === "ARREAR" || r.isArrear ? "bg-amber-100 text-amber-800" : "bg-gray-100 text-gray-600"}`}>
+                              {r.arrearStatus || (r.isArrear ? "ARREAR" : "REGULAR")}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </motion.div>
         )}
 
@@ -2305,625 +2326,6 @@ export default function AdminDashboard({ onLogout }) {
           </motion.div>
         )}
 
-        {activeTab === "arrear_manager" && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
-            
-            {/* Overview / Summary Stats */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex flex-col justify-between">
-                <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Total Arrear Records</span>
-                <span className="text-3xl font-black text-rose-600 mt-2">{arrearRecords.length}</span>
-              </div>
-              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex flex-col justify-between">
-                <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Valid Internals</span>
-                <span className="text-3xl font-black text-emerald-600 mt-2">
-                  {arrearRecords.filter(r => r.calculatedStatus === "VALID").length}
-                </span>
-              </div>
-              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex flex-col justify-between">
-                <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Expired Internals</span>
-                <span className="text-3xl font-black text-amber-600 mt-2">
-                  {arrearRecords.filter(r => r.calculatedStatus === "EXPIRED").length}
-                </span>
-              </div>
-              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex flex-col justify-between">
-                <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Admin Overridden</span>
-                <span className="text-3xl font-black text-indigo-600 mt-2">
-                  {arrearRecords.filter(r => r.isOverridden).length}
-                </span>
-              </div>
-            </div>
-
-            {/* Arrear Settings & Excel Upload Grid */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              
-              {/* Arrear Settings Card */}
-              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 lg:col-span-1">
-                <h3 className="text-md font-bold text-gray-700 mb-4">⚙️ Arrear Rules & Settings</h3>
-                <form onSubmit={handleUpdateArrearSettings} className="space-y-4">
-                  <div>
-                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Internal Validity (Semesters)</label>
-                    <input 
-                      type="number"
-                      min="1"
-                      max="10"
-                      value={arrearSettings.internalValiditySemesters}
-                      onChange={e => setArrearSettings({ ...arrearSettings, internalValiditySemesters: parseInt(e.target.value) || 3 })}
-                      className="w-full p-2 border border-gray-300 rounded outline-none text-sm font-bold text-gray-700"
-                      required
-                    />
-                    <p className="text-[10px] text-gray-400 mt-1">Number of semesters an internal mark remains valid (default: 3).</p>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Expired Internal Theory Requirement (%)</label>
-                    <input 
-                      type="number"
-                      min="0"
-                      max="100"
-                      value={arrearSettings.expiredInternalTheoryPassPercentage}
-                      onChange={e => setArrearSettings({ ...arrearSettings, expiredInternalTheoryPassPercentage: parseFloat(e.target.value) || 50.0 })}
-                      className="w-full p-2 border border-gray-300 rounded outline-none text-sm font-bold text-gray-700"
-                      required
-                    />
-                    <p className="text-[10px] text-gray-400 mt-1">Passing percentage required in theory when internal is expired (default: 50%).</p>
-                  </div>
-                  <button 
-                    type="submit"
-                    className="w-full py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg shadow-sm text-sm transition-all"
-                  >
-                    Save Settings
-                  </button>
-                </form>
-              </div>
-
-              {/* Excel Upload Card */}
-              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 lg:col-span-2">
-                <div className="flex justify-between items-center mb-4">
-                  <h3 className="text-md font-bold text-gray-700">📤 Import Arrear Internals</h3>
-                  <button 
-                    onClick={handleDownloadArrearTemplate}
-                    className="bg-gray-100 hover:bg-gray-200 border text-gray-700 font-bold py-1 px-3 rounded text-xs transition-colors"
-                  >
-                    📄 Download Template
-                  </button>
-                </div>
-                <div className="space-y-4">
-                  <p className="text-xs text-gray-500">
-                    Upload internal marks of arrear students. Required columns: <b>Roll No</b>, <b>Subject Code</b>, <b>Original Semester</b>, and <b>Internal Mark</b>.
-                  </p>
-                  <div className="border-2 border-dashed border-rose-200 hover:border-rose-400 rounded-xl p-6 text-center cursor-pointer transition-colors relative">
-                    <input 
-                      type="file" 
-                      accept=".xlsx, .xls"
-                      onChange={handleArrearExcelUpload}
-                      className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-                    />
-                    <span className="text-3xl block mb-2">📊</span>
-                    <span className="text-sm font-bold text-rose-600 hover:underline">Select Arrears Excel File</span>
-                    <span className="text-xs text-gray-400 block mt-1">Only .xlsx or .xls files supported</span>
-                  </div>
-                </div>
-              </div>
-
-            </div>
-
-            {/* Excel Validation Preview Area */}
-            {arrearPreviewData.length > 0 && (
-              <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-                <div className="p-4 border-b border-gray-100 bg-gray-50 flex justify-between items-center">
-                  <div>
-                    <h3 className="font-bold text-gray-800 text-sm">Preview Upload Data</h3>
-                    <p className="text-xs text-gray-500">Showing {arrearPreviewData.length} records parsed from spreadsheet.</p>
-                  </div>
-                  <div className="flex gap-2">
-                    <button 
-                      onClick={() => {
-                        setArrearPreviewData([]);
-                        setArrearErrors([]);
-                        setArrearWarnings([]);
-                        setIsValidArrearUpload(false);
-                      }}
-                      className="bg-white border text-gray-600 font-bold py-1.5 px-4 rounded-lg text-xs"
-                    >
-                      Cancel
-                    </button>
-                    <button 
-                      onClick={handleConfirmArrearSave}
-                      disabled={!isValidArrearUpload}
-                      className="bg-rose-600 hover:bg-rose-700 text-white font-bold py-1.5 px-4 rounded-lg text-xs disabled:bg-gray-300"
-                    >
-                      Confirm & Save
-                    </button>
-                  </div>
-                </div>
-
-                {/* Errors/Warnings notifications */}
-                {(arrearErrors.length > 0 || arrearWarnings.length > 0) && (
-                  <div className="p-4 border-b border-gray-200 bg-amber-50/50 space-y-2">
-                    {arrearErrors.map((err, i) => (
-                      <div key={`err-${i}`} className="text-xs font-bold text-red-600 flex items-center gap-1">❌ {err}</div>
-                    ))}
-                    {arrearWarnings.map((warn, i) => (
-                      <div key={`warn-${i}`} className="text-xs font-bold text-amber-600 flex items-center gap-1">⚠️ {warn}</div>
-                    ))}
-                  </div>
-                )}
-
-                <div className="max-h-[300px] overflow-y-auto">
-                  <table className="w-full text-sm text-left">
-                    <thead className="bg-gray-100 text-gray-600 text-xs font-bold sticky top-0 z-10">
-                      <tr>
-                        <th className="px-4 py-2">Roll No</th>
-                        <th className="px-4 py-2">Student Name</th>
-                        <th className="px-4 py-2">Subject Code</th>
-                        <th className="px-4 py-2">Subject Name</th>
-                        <th className="px-4 py-2 text-center">Orig Sem</th>
-                        <th className="px-4 py-2 text-center">Curr Sem</th>
-                        <th className="px-4 py-2 text-center">Internal Mark</th>
-                        <th className="px-4 py-2">Paper Type</th>
-                        <th className="px-4 py-2">Regulation</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100 text-xs">
-                      {arrearPreviewData.map((row, i) => (
-                        <tr key={i} className="hover:bg-gray-50">
-                          <td className="px-4 py-2 font-mono font-bold text-gray-800">{row.rollNo}</td>
-                          <td className="px-4 py-2 text-gray-600 font-semibold">{row.studentName}</td>
-                          <td className="px-4 py-2 font-mono font-bold text-indigo-600">{row.subjectCode}</td>
-                          <td className="px-4 py-2 text-gray-700">{row.subjectName}</td>
-                          <td className="px-4 py-2 text-center">Sem {row.originalSemester}</td>
-                          <td className="px-4 py-2 text-center">Sem {row.currentSemester}</td>
-                          <td className="px-4 py-2 text-center font-extrabold text-amber-700">{row.internalMark}</td>
-                          <td className="px-4 py-2 text-gray-500">{row.paperType}</td>
-                          <td className="px-4 py-2 text-gray-500">R-{row.regulation}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-
-            {/* Main Interactive Workspace */}
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-              <div className="p-4 border-b border-gray-100 bg-gray-50 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                {/* Mode Selector */}
-                <div className="flex bg-gray-100 p-1 rounded-lg shrink-0">
-                  <button 
-                    onClick={() => setArrearActiveSubView("dashboard")} 
-                    className={`px-4 py-1.5 text-xs font-bold rounded-md transition-all ${arrearActiveSubView === "dashboard" ? "bg-white text-rose-600 shadow-sm" : "text-gray-500"}`}
-                  >
-                    🚨 General List
-                  </button>
-                  <button 
-                    onClick={() => {
-                      setArrearActiveSubView("student");
-                      if (arrearRecords.length > 0 && !selectedStudentForView) {
-                        setSelectedStudentForView(arrearRecords[0].registerNumber);
-                      }
-                    }} 
-                    className={`px-4 py-1.5 text-xs font-bold rounded-md transition-all ${arrearActiveSubView === "student" ? "bg-white text-rose-600 shadow-sm" : "text-gray-500"}`}
-                  >
-                    👤 Student View
-                  </button>
-                  <button 
-                    onClick={() => {
-                      setArrearActiveSubView("subject");
-                      if (arrearRecords.length > 0 && !selectedSubjectForView) {
-                        setSelectedSubjectForView(arrearRecords[0].subjectCode);
-                      }
-                    }} 
-                    className={`px-4 py-1.5 text-xs font-bold rounded-md transition-all ${arrearActiveSubView === "subject" ? "bg-white text-rose-600 shadow-sm" : "text-gray-500"}`}
-                  >
-                    📚 Subject View
-                  </button>
-                </div>
-
-                {/* Filters (only visible in dashboard/general list mode) */}
-                {arrearActiveSubView === "dashboard" && (
-                  <div className="flex flex-wrap gap-2 w-full md:w-auto items-center justify-end">
-                    <select 
-                      value={arrearSearchDept} 
-                      onChange={e => setArrearSearchDept(e.target.value)} 
-                      className="p-2 border border-gray-300 rounded outline-none text-xs font-bold text-gray-600 bg-white"
-                    >
-                      <option value="ALL">All Depts</option>
-                      {DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}
-                    </select>
-                    <select 
-                      value={arrearSearchStatus} 
-                      onChange={e => setArrearSearchStatus(e.target.value)} 
-                      className="p-2 border border-gray-300 rounded outline-none text-xs font-bold text-gray-600 bg-white"
-                    >
-                      <option value="">All Statuses</option>
-                      <option value="VALID">VALID</option>
-                      <option value="EXPIRED">EXPIRED</option>
-                      <option value="OVERRIDDEN">OVERRIDDEN</option>
-                    </select>
-                    <input 
-                      type="text" 
-                      placeholder="Search Roll No..." 
-                      value={arrearSearchRollNo}
-                      onChange={e => setArrearSearchRollNo(e.target.value)}
-                      className="p-2 border border-gray-300 rounded outline-none text-xs w-36"
-                    />
-                    <input 
-                      type="text" 
-                      placeholder="Subject Code..." 
-                      value={arrearSearchSubject}
-                      onChange={e => setArrearSearchSubject(e.target.value)}
-                      className="p-2 border border-gray-300 rounded outline-none text-xs w-36"
-                    />
-                  </div>
-                )}
-              </div>
-
-              {/* View 1: General List Dashboard */}
-              {arrearActiveSubView === "dashboard" && (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm text-left">
-                    <thead className="bg-gray-100 text-gray-600 uppercase text-xs font-bold border-b border-gray-200">
-                      <tr>
-                        <th className="px-6 py-3">Roll No</th>
-                        <th className="px-6 py-3">Student Name</th>
-                        <th className="px-6 py-3 text-center">Dept</th>
-                        <th className="px-6 py-3">Subject</th>
-                        <th className="px-6 py-3 text-center">Original Sem</th>
-                        <th className="px-6 py-3 text-center">Internal Mark</th>
-                        <th className="px-6 py-3 text-center">Current Sem</th>
-                        <th className="px-6 py-3 text-center">Status</th>
-                        <th className="px-6 py-3 text-center">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {arrearRecords.length === 0 ? (
-                        <tr>
-                          <td colSpan="9" className="p-8 text-center text-gray-400 font-semibold">
-                            No arrear records matching selected filters found.
-                          </td>
-                        </tr>
-                      ) : (
-                        arrearRecords.map((rec, i) => (
-                          <tr key={i} className="hover:bg-gray-50/50">
-                            <td className="px-6 py-4 font-mono font-bold text-gray-800">{rec.registerNumber}</td>
-                            <td className="px-6 py-4 text-gray-700 font-semibold">{rec.studentName}</td>
-                            <td className="px-6 py-4 text-center"><span className="bg-gray-100 text-gray-700 px-2 py-0.5 rounded text-xs font-bold">{rec.department}</span></td>
-                            <td className="px-6 py-4">
-                              <div className="font-mono font-bold text-indigo-600 text-xs">{rec.subjectCode}</div>
-                              <div className="text-xs text-gray-500 truncate max-w-[200px]">{rec.subjectName}</div>
-                            </td>
-                            <td className="px-6 py-4 text-center font-medium">Sem {rec.originalSemester}</td>
-                            <td className="px-6 py-4 text-center font-extrabold text-amber-700">{rec.internalMark}</td>
-                            <td className="px-6 py-4 text-center font-medium">Sem {rec.currentSemester}</td>
-                            <td className="px-6 py-4 text-center">
-                              <span className={`px-3 py-1 rounded-full text-xs font-bold shadow-sm ${
-                                rec.calculatedStatus === "VALID" 
-                                  ? "bg-emerald-50 text-emerald-700 border border-emerald-200" 
-                                  : "bg-red-50 text-red-700 border border-red-200"
-                              }`}>
-                                {rec.calculatedStatus}
-                              </span>
-                              {rec.isOverridden && (
-                                <span className="block text-[8px] font-bold text-indigo-500 mt-1 uppercase tracking-wider">
-                                  Overridden
-                                </span>
-                              )}
-                            </td>
-                            <td className="px-6 py-4 text-center">
-                              <div className="flex justify-center gap-2">
-                                <button 
-                                  onClick={() => {
-                                    setSelectedRecordForOverride(rec);
-                                    setOverrideStatus(rec.calculatedStatus);
-                                    setOverrideReason(rec.overrideDetails?.reason || "");
-                                    setOverrideExpiry(rec.overrideDetails?.overrideExpirySem || "");
-                                  }}
-                                  className="bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold py-1 px-3.5 rounded text-xs transition-colors"
-                                >
-                                  Override
-                                </button>
-                                {rec.isOverridden && (
-                                  <button 
-                                    onClick={() => handleRemoveOverride(rec)}
-                                    className="bg-red-50 hover:bg-red-100 text-red-600 font-bold py-1 px-2 rounded text-xs transition-colors"
-                                    title="Remove Override"
-                                  >
-                                    Reset
-                                  </button>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-
-              {/* View 2: Student-wise view */}
-              {arrearActiveSubView === "student" && (
-                <div className="p-6 space-y-6">
-                  <div className="flex gap-4 items-center border-b pb-4 mb-4">
-                    <label className="font-bold text-gray-700 text-sm">Select Student:</label>
-                    <select 
-                      value={selectedStudentForView} 
-                      onChange={e => setSelectedStudentForView(e.target.value)}
-                      className="p-2 border border-gray-300 rounded outline-none font-mono text-sm font-bold text-gray-700 bg-white min-w-[200px]"
-                    >
-                      <option value="">-- Choose Student --</option>
-                      {Array.from(new Set(arrearRecords.map(r => r.registerNumber))).map(regNo => {
-                        const rec = arrearRecords.find(r => r.registerNumber === regNo);
-                        return <option key={regNo} value={regNo}>{`${regNo} - ${rec?.studentName || ""}`}</option>;
-                      })}
-                    </select>
-                  </div>
-
-                  {selectedStudentForView ? (
-                    <div className="space-y-4">
-                      {(() => {
-                        const studentRecs = arrearRecords.filter(r => r.registerNumber === selectedStudentForView);
-                        if (studentRecs.length === 0) return <p className="text-gray-400 font-medium">No arrear records for this student.</p>;
-                        
-                        return (
-                          <>
-                            <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 flex justify-between items-center">
-                              <div>
-                                <h4 className="font-bold text-slate-800 text-base">{studentRecs[0].studentName}</h4>
-                                <p className="text-xs font-mono text-slate-500 font-bold mt-1">{studentRecs[0].registerNumber} &nbsp;·&nbsp; {studentRecs[0].department}</p>
-                              </div>
-                              <span className="bg-rose-100 text-rose-800 px-3 py-1 rounded-full text-xs font-black shadow-sm">
-                                {studentRecs.length} Arrear Subject(s)
-                              </span>
-                            </div>
-
-                            <div className="overflow-x-auto rounded-lg border border-gray-200">
-                              <table className="w-full text-sm text-left">
-                                <thead className="bg-gray-50 text-gray-600 uppercase text-xs font-bold border-b border-gray-200">
-                                  <tr>
-                                    <th className="px-4 py-2.5">Subject Code</th>
-                                    <th className="px-4 py-2.5">Subject Name</th>
-                                    <th className="px-4 py-2.5 text-center">Original Sem</th>
-                                    <th className="px-4 py-2.5 text-center">Current Sem</th>
-                                    <th className="px-4 py-2.5 text-center">Internal Mark</th>
-                                    <th className="px-4 py-2.5 text-center">Status</th>
-                                    <th className="px-4 py-2.5 text-center">Actions</th>
-                                  </tr>
-                                </thead>
-                                <tbody className="divide-y divide-gray-100">
-                                  {studentRecs.map((rec, i) => (
-                                    <tr key={i} className="hover:bg-gray-50/40">
-                                      <td className="px-4 py-3 font-mono font-bold text-indigo-600 text-xs">{rec.subjectCode}</td>
-                                      <td className="px-4 py-3 text-gray-700 font-medium">{rec.subjectName}</td>
-                                      <td className="px-4 py-3 text-center">Sem {rec.originalSemester}</td>
-                                      <td className="px-4 py-3 text-center">Sem {rec.currentSemester}</td>
-                                      <td className="px-4 py-3 text-center font-extrabold text-amber-700">{rec.internalMark}</td>
-                                      <td className="px-4 py-3 text-center">
-                                        <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${
-                                          rec.calculatedStatus === "VALID" 
-                                            ? "bg-emerald-50 text-emerald-700 border border-emerald-200" 
-                                            : "bg-red-50 text-red-700 border border-red-200"
-                                        }`}>
-                                          {rec.calculatedStatus}
-                                        </span>
-                                      </td>
-                                      <td className="px-4 py-3 text-center">
-                                        <button 
-                                          onClick={() => {
-                                            setSelectedRecordForOverride(rec);
-                                            setOverrideStatus(rec.calculatedStatus);
-                                            setOverrideReason(rec.overrideDetails?.reason || "");
-                                            setOverrideExpiry(rec.overrideDetails?.overrideExpirySem || "");
-                                          }}
-                                          className="bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold py-1 px-3 rounded text-xs transition-colors"
-                                        >
-                                          Override
-                                        </button>
-                                      </td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                          </>
-                        );
-                      })()}
-                    </div>
-                  ) : (
-                    <p className="text-center text-gray-400 p-8">Please choose a student from the dropdown list to see individual details.</p>
-                  )}
-                </div>
-              )}
-
-              {/* View 3: Subject-wise view */}
-              {arrearActiveSubView === "subject" && (
-                <div className="p-6 space-y-6">
-                  <div className="flex gap-4 items-center border-b pb-4 mb-4">
-                    <label className="font-bold text-gray-700 text-sm">Select Subject:</label>
-                    <select 
-                      value={selectedSubjectForView} 
-                      onChange={e => setSelectedSubjectForView(e.target.value)}
-                      className="p-2 border border-gray-300 rounded outline-none font-mono text-sm font-bold text-gray-700 bg-white min-w-[200px]"
-                    >
-                      <option value="">-- Choose Subject --</option>
-                      {Array.from(new Set(arrearRecords.map(r => r.subjectCode))).map(subCode => {
-                        const rec = arrearRecords.find(r => r.subjectCode === subCode);
-                        return <option key={subCode} value={subCode}>{`${subCode} - ${rec?.subjectName || ""}`}</option>;
-                      })}
-                    </select>
-                  </div>
-
-                  {selectedSubjectForView ? (
-                    <div className="space-y-4">
-                      {(() => {
-                        const subjectRecs = arrearRecords.filter(r => r.subjectCode === selectedSubjectForView);
-                        if (subjectRecs.length === 0) return <p className="text-gray-400 font-medium">No arrear records for this subject.</p>;
-                        
-                        return (
-                          <>
-                            <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 flex justify-between items-center">
-                              <div>
-                                <h4 className="font-bold text-slate-800 text-base">{subjectRecs[0].subjectName}</h4>
-                                <p className="text-xs font-mono text-slate-500 font-bold mt-1">{subjectRecs[0].subjectCode} &nbsp;·&nbsp; Credits: {subjectRecs[0].credits} &nbsp;·&nbsp; Type: {subjectRecs[0].paperType}</p>
-                              </div>
-                              <span className="bg-purple-100 text-purple-800 px-3 py-1 rounded-full text-xs font-black shadow-sm">
-                                {subjectRecs.length} Student(s) with Arrear
-                              </span>
-                            </div>
-
-                            <div className="overflow-x-auto rounded-lg border border-gray-200">
-                              <table className="w-full text-sm text-left">
-                                <thead className="bg-gray-50 text-gray-600 uppercase text-xs font-bold border-b border-gray-200">
-                                  <tr>
-                                    <th className="px-4 py-2.5">Roll No</th>
-                                    <th className="px-4 py-2.5">Student Name</th>
-                                    <th className="px-4 py-2.5 text-center">Original Sem</th>
-                                    <th className="px-4 py-2.5 text-center">Current Sem</th>
-                                    <th className="px-4 py-2.5 text-center">Internal Mark</th>
-                                    <th className="px-4 py-2.5 text-center">Status</th>
-                                    <th className="px-4 py-2.5 text-center">Actions</th>
-                                  </tr>
-                                </thead>
-                                <tbody className="divide-y divide-gray-100">
-                                  {subjectRecs.map((rec, i) => (
-                                    <tr key={i} className="hover:bg-gray-50/40">
-                                      <td className="px-4 py-3 font-mono font-bold text-gray-800 text-xs">{rec.registerNumber}</td>
-                                      <td className="px-4 py-3 text-gray-700 font-semibold">{rec.studentName}</td>
-                                      <td className="px-4 py-3 text-center">Sem {rec.originalSemester}</td>
-                                      <td className="px-4 py-3 text-center">Sem {rec.currentSemester}</td>
-                                      <td className="px-4 py-3 text-center font-extrabold text-amber-700">{rec.internalMark}</td>
-                                      <td className="px-4 py-3 text-center">
-                                        <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${
-                                          rec.calculatedStatus === "VALID" 
-                                            ? "bg-emerald-50 text-emerald-700 border border-emerald-200" 
-                                            : "bg-red-50 text-red-700 border border-red-200"
-                                        }`}>
-                                          {rec.calculatedStatus}
-                                        </span>
-                                      </td>
-                                      <td className="px-4 py-3 text-center">
-                                        <button 
-                                          onClick={() => {
-                                            setSelectedRecordForOverride(rec);
-                                            setOverrideStatus(rec.calculatedStatus);
-                                            setOverrideReason(rec.overrideDetails?.reason || "");
-                                            setOverrideExpiry(rec.overrideDetails?.overrideExpirySem || "");
-                                          }}
-                                          className="bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold py-1 px-3 rounded text-xs transition-colors"
-                                        >
-                                          Override
-                                        </button>
-                                      </td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                          </>
-                        );
-                      })()}
-                    </div>
-                  ) : (
-                    <p className="text-center text-gray-400 p-8">Please choose a subject from the dropdown list to see registered student details.</p>
-                  )}
-                </div>
-              )}
-
-            </div>
-
-            {/* Override Modal */}
-            {selectedRecordForOverride && (
-              <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-                <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-y-auto p-6 relative">
-                  <button 
-                    onClick={() => setSelectedRecordForOverride(null)} 
-                    className="absolute top-4 right-4 text-gray-400 hover:text-gray-800 font-bold text-xl"
-                  >
-                    ✕
-                  </button>
-                  <h2 className="text-lg font-bold text-indigo-800 mb-4 border-b pb-2">Apply Validity Status Override</h2>
-                  
-                  <div className="space-y-4 text-sm">
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <p className="text-xs font-bold text-gray-400 uppercase">Student Name</p>
-                        <p className="font-semibold text-gray-800">{selectedRecordForOverride.studentName}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs font-bold text-gray-400 uppercase">Roll No</p>
-                        <p className="font-mono font-bold text-gray-800">{selectedRecordForOverride.registerNumber}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs font-bold text-gray-400 uppercase">Subject</p>
-                        <p className="font-bold text-indigo-700">{selectedRecordForOverride.subjectCode}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs font-bold text-gray-400 uppercase">Internal Mark</p>
-                        <p className="font-black text-amber-700">{selectedRecordForOverride.internalMark}</p>
-                      </div>
-                    </div>
-
-                    <form onSubmit={handleSaveOverride} className="space-y-4 pt-4 border-t border-gray-100">
-                      <div>
-                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Target Override Status</label>
-                        <select 
-                          value={overrideStatus} 
-                          onChange={e => setOverrideStatus(e.target.value)}
-                          className="w-full p-2 border border-gray-300 rounded outline-none font-bold text-gray-700 bg-white text-sm"
-                        >
-                          <option value="VALID">VALID (Force internal mark use)</option>
-                          <option value="EXPIRED">EXPIRED (Force expired theory requirements)</option>
-                        </select>
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Reason for Override *</label>
-                        <textarea 
-                          value={overrideReason}
-                          onChange={e => setOverrideReason(e.target.value)}
-                          placeholder="e.g. Exceptional medical exemption granted by COE"
-                          className="w-full p-2 border border-gray-300 rounded outline-none text-xs h-20"
-                          required
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Override Expiry Semester (Optional)</label>
-                        <input 
-                          type="number"
-                          min="1"
-                          max="8"
-                          value={overrideExpiry}
-                          onChange={e => setOverrideExpiry(e.target.value)}
-                          placeholder="e.g. 6"
-                          className="w-full p-2 border border-gray-300 rounded outline-none text-xs"
-                        />
-                        <p className="text-[10px] text-gray-400 mt-1">If blank, the override will apply indefinitely.</p>
-                      </div>
-
-                      <div className="flex gap-2 justify-end pt-2">
-                        <button 
-                          type="button"
-                          onClick={() => setSelectedRecordForOverride(null)}
-                          className="bg-white border text-gray-600 font-bold py-2 px-4 rounded-lg text-xs"
-                        >
-                          Cancel
-                        </button>
-                        <button 
-                          type="submit"
-                          className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-5 rounded-lg text-xs shadow-sm"
-                        >
-                          Apply Override
-                        </button>
-                      </div>
-                    </form>
-                  </div>
-                </div>
-              </div>
-            )}
-
-          </motion.div>
-        )}
 
         {activeTab === "settings" && (
            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="max-w-md mx-auto space-y-6">
@@ -2987,6 +2389,145 @@ export default function AdminDashboard({ onLogout }) {
               </div>
            </motion.div>
          )}
+
+        {/* Promotion Confirmation Modal with Admin Password */}
+        <AnimatePresence>
+          {showPromoteModal && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+            >
+              <motion.div
+                initial={{ scale: 0.95, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.95, opacity: 0 }}
+                className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200"
+              >
+                {/* Modal Header */}
+                <div className="bg-gradient-to-r from-indigo-700 to-indigo-800 px-6 py-4 text-white flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <span className="text-2xl">🎓</span>
+                    <div>
+                      <h3 className="font-bold text-base leading-tight">Confirm Student Promotion</h3>
+                      <p className="text-[11px] text-indigo-200">Admin password required</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => { setShowPromoteModal(false); setPromotePassword(""); setPromoteError(""); }}
+                    className="text-white/70 hover:text-white font-bold text-lg p-1 transition-colors cursor-pointer"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                {/* Modal Body */}
+                <form onSubmit={handleExecutePromotion} className="p-6 space-y-4">
+                  {/* Scope summary card */}
+                  <div className="bg-indigo-50/70 border border-indigo-100 rounded-xl p-3.5 text-xs space-y-2">
+                    <div className="flex justify-between items-center text-slate-600">
+                      <span className="font-semibold uppercase tracking-wider text-[10px] text-indigo-900">Target Department:</span>
+                      <span className="font-bold text-indigo-950 bg-white px-2 py-0.5 rounded shadow-xs border border-indigo-100">
+                        {promoDept === "ALL" ? "🌐 All Departments" : promoDept}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center text-slate-600">
+                      <span className="font-semibold uppercase tracking-wider text-[10px] text-indigo-900">Target Semester:</span>
+                      <span className="font-bold text-indigo-950 bg-white px-2 py-0.5 rounded shadow-xs border border-indigo-100">
+                        {promoSem === "ALL" ? "⚡ All Semesters (1 to 8)" : `Semester ${promoSem}`}
+                      </span>
+                    </div>
+                    <div className="border-t border-indigo-100/80 pt-2 text-indigo-900/90 leading-relaxed text-[11px]">
+                      {promoSem === "ALL" ? (
+                        <span>
+                          Students in <b>Semesters 1 - 7</b> will advance one semester. Students in <b>Semester 8</b> will be marked as <b>Graduated (Semester 99)</b>.
+                        </span>
+                      ) : Number(promoSem) === 8 ? (
+                        <span>
+                          All Semester 8 students will be marked as <b>Graduated (Semester 99)</b>.
+                        </span>
+                      ) : (
+                        <span>
+                          Students in <b>Semester {promoSem}</b> will advance to <b>Semester {Number(promoSem) + 1}</b>.
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Warning */}
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-[11px] text-amber-900 flex items-start gap-2">
+                    <span className="text-amber-600 text-sm mt-0.5">⚠️</span>
+                    <p className="leading-tight">
+                      This action updates students' semester and year. Please confirm with your admin password.
+                    </p>
+                  </div>
+
+                  {/* Password Input */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">
+                      Admin Password <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="password"
+                      autoFocus
+                      value={promotePassword}
+                      onChange={(e) => {
+                        setPromotePassword(e.target.value);
+                        if (promoteError) setPromoteError("");
+                      }}
+                      placeholder="Enter admin password to confirm..."
+                      className="w-full px-3.5 py-2.5 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white shadow-xs"
+                      required
+                    />
+                  </div>
+
+                  {/* Error Message */}
+                  {promoteError && (
+                    <div className="p-2.5 bg-red-50 border border-red-200 text-red-700 text-xs font-semibold rounded-lg flex items-center gap-1.5">
+                      <span>❌</span>
+                      <span>{promoteError}</span>
+                    </div>
+                  )}
+
+                  {/* Action Buttons */}
+                  <div className="flex gap-2.5 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowPromoteModal(false);
+                        setPromotePassword("");
+                        setPromoteError("");
+                      }}
+                      disabled={promoteLoading}
+                      className="flex-1 py-2.5 px-4 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={promoteLoading || !promotePassword.trim()}
+                      className="flex-1 py-2.5 px-4 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 rounded-lg shadow-md transition-all flex items-center justify-center gap-1.5 active:scale-98 cursor-pointer"
+                    >
+                      {promoteLoading ? (
+                        <>
+                          <span className="animate-spin">⏳</span>
+                          <span>Promoting...</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>🚀</span>
+                          <span>Confirm &amp; Promote</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </form>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         </main>
 

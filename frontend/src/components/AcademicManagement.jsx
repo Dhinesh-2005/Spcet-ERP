@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { API_BASE } from "../utils";
 
 export default function AcademicManagement() {
-  const [subTab, setSubTab] = useState("subjects"); // "subjects", "faculty_access", "assessment_config", "departments"
+  const [subTab, setSubTab] = useState("subjects"); // "subjects", "faculty_access"
 
   // ─────────────────────────────────────────────────────────────────────────
   // SUBJECT MASTER STATES
@@ -11,6 +11,7 @@ export default function AcademicManagement() {
   const [subjectFilterDept, setSubjectFilterDept] = useState("ALL");
   const [subjectFilterType, setSubjectFilterType] = useState("ALL");
   const [subjectFilterRegulation, setSubjectFilterRegulation] = useState("ALL");
+  const [subjectSearchQuery, setSubjectSearchQuery] = useState("");
   const [showSubjectModal, setShowSubjectModal] = useState(false);
   const [subjectForm, setSubjectForm] = useState({
     subjectCode: "",
@@ -34,6 +35,34 @@ export default function AcademicManagement() {
 
   const getSubKey = (sub) => sub.id || `${sub.subjectCode}_${sub.department}_${sub.regulation || "2021"}`;
 
+  // Filter subjects by search query (subject code and subject name/title)
+  const filteredSubjects = subjects.filter((sub) => {
+    if (!subjectSearchQuery.trim()) return true;
+    const q = subjectSearchQuery.trim().toLowerCase();
+    const code = (sub.subjectCode || "").toLowerCase();
+    const name = (sub.subjectName || sub.subjectTitle || sub.name || "").toLowerCase();
+    const rawCode = code.replace(/\s+/g, "");
+    const rawQ = q.replace(/\s+/g, "");
+
+    // 1. Direct substring match on code or name
+    if (code.includes(q) || name.includes(q)) return true;
+
+    // 2. Space-insensitive code match (e.g. "AI 3021" matches "AI3021")
+    if (rawCode && rawCode.includes(rawQ)) return true;
+
+    // 3. Combined match
+    const combined = `${code} ${name}`;
+    if (combined.includes(q)) return true;
+
+    // 4. Multi-token match (all words match in code or name)
+    const tokens = q.split(/\s+/).filter(Boolean);
+    if (tokens.length > 1) {
+      return tokens.every((token) => code.includes(token) || name.includes(token));
+    }
+
+    return false;
+  });
+
   const toggleSelectSubject = (sub) => {
     const key = getSubKey(sub);
     setSelectedSubjectKeys((prev) =>
@@ -42,10 +71,13 @@ export default function AcademicManagement() {
   };
 
   const toggleSelectAll = () => {
-    if (selectedSubjectKeys.length === subjects.length && subjects.length > 0) {
-      setSelectedSubjectKeys([]);
+    const visibleKeys = filteredSubjects.map(getSubKey);
+    if (visibleKeys.length === 0) return;
+    const allVisibleSelected = visibleKeys.every((k) => selectedSubjectKeys.includes(k));
+    if (allVisibleSelected) {
+      setSelectedSubjectKeys((prev) => prev.filter((k) => !visibleKeys.includes(k)));
     } else {
-      setSelectedSubjectKeys(subjects.map(getSubKey));
+      setSelectedSubjectKeys((prev) => Array.from(new Set([...prev, ...visibleKeys])));
     }
   };
 
@@ -112,18 +144,25 @@ export default function AcademicManagement() {
   // ─────────────────────────────────────────────────────────────────────────
   const [faculties, setFaculties] = useState([]);
   const [selectedFaculty, setSelectedFaculty] = useState(null);
-  const [assignedSubjects, setAssignedSubjects] = useState([]);
+  const [assignedAssignments, setAssignedAssignments] = useState([]);
   const [savingAccess, setSavingAccess] = useState(false);
+  const [selectedToAssignKeys, setSelectedToAssignKeys] = useState([]);
 
-  // Option 1 Filter: Faculty Members
+  // Option 1 Filter: Faculty Members List
   const [facultyFilterDept, setFacultyFilterDept] = useState("ALL");
   const [facultySearchInput, setFacultySearchInput] = useState("");
   const [facultySearchQuery, setFacultySearchQuery] = useState("");
 
-  // Option 2 Filter: Assigning Subjects (uses assignSubjectsList state fetched from API)
-  const [assignSubjectFilterDept, setAssignSubjectFilterDept] = useState("ALL");
-  const [assignSubjectSearchText, setAssignSubjectSearchText] = useState("");
-  const [assignSubjectsList, setAssignSubjectsList] = useState([]);
+  // Filters: Available Student Subjects
+  const [availSubjectDept, setAvailSubjectDept] = useState("ALL");
+  const [availSubjectReg, setAvailSubjectReg] = useState("ALL");
+  const [availSubjectSem, setAvailSubjectSem] = useState("ALL");
+  const [availSubjectYear, setAvailSubjectYear] = useState("ALL");
+  const [availSubjectSearch, setAvailSubjectSearch] = useState("");
+  const [availableSubjectsList, setAvailableSubjectsList] = useState([]);
+  const [loadingAvailableSubjects, setLoadingAvailableSubjects] = useState(false);
+  const [regulationsList, setRegulationsList] = useState(["2021", "2024"]);
+  const [academicYearsList, setAcademicYearsList] = useState(["2023-2024", "2024-2025", "2025-2026", "2026-2027"]);
 
   // Faculty filter derived value
   const filteredFaculties = faculties.filter((fac) => {
@@ -135,33 +174,6 @@ export default function AcademicManagement() {
       (fac.registerNumber || "").toLowerCase().includes(query);
     return matchesDept && matchesSearch;
   });
-
-  // Assign subjects list is always fresh from API (see fetchSubjectsForAssignment)
-  // Local text search on top of the already dept-filtered API results
-  const filteredAssignSubjects = assignSubjectsList.filter((sub) => {
-    const search = assignSubjectSearchText.trim().toLowerCase();
-    if (!search) return true;
-    return (
-      (sub.subjectCode || "").toLowerCase().includes(search) ||
-      (sub.subjectName || "").toLowerCase().includes(search)
-    );
-  });
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // ASSESSMENT CONFIG STATES
-  // ─────────────────────────────────────────────────────────────────────────
-  const [configDept, setConfigDept] = useState("CSE");
-  const [configSem, setConfigSem] = useState(1);
-  const [configComponents, setConfigComponents] = useState([
-    { name: "UT1", maxMarks: 20 },
-    { name: "UT2", maxMarks: 20 },
-    { name: "Unit 1", maxMarks: 20 },
-    { name: "Unit 2", maxMarks: 20 },
-    { name: "Unit 3", maxMarks: 20 },
-    { name: "Unit 4", maxMarks: 20 },
-    { name: "Unit 5", maxMarks: 20 },
-  ]);
-  const [savingConfig, setSavingConfig] = useState(false);
 
   const DEPARTMENTS = ["CSE", "IT", "ECE", "EEE", "AIDS", "MECH", "CIVIL", "CSBS", "BIOTECH", "AERO"];
 
@@ -179,19 +191,53 @@ export default function AcademicManagement() {
     }
   };
 
-  // Fetch subjects for assignment panel — calls backend with dept filter for accuracy
-  const fetchSubjectsForAssignment = async (dept = "ALL") => {
+  // Fetch available student subjects offered in curriculum/enrollment
+  const fetchAvailableSubjects = async () => {
+    setLoadingAvailableSubjects(true);
     try {
       const params = new URLSearchParams();
-      if (dept && dept !== "ALL") params.append("department", dept);
-      const url = `${API_BASE}/api/academic/subjects?${params.toString()}`;
-      const res = await fetch(url);
+      if (availSubjectDept && availSubjectDept !== "ALL") params.append("department", availSubjectDept);
+      if (availSubjectReg && availSubjectReg !== "ALL") params.append("regulation", availSubjectReg);
+      if (availSubjectSem && availSubjectSem !== "ALL") params.append("semester", availSubjectSem);
+      if (availSubjectYear && availSubjectYear !== "ALL") params.append("academicYear", availSubjectYear);
+      if (availSubjectSearch.trim()) params.append("search", availSubjectSearch.trim());
+
+      const res = await fetch(`${API_BASE}/api/academic/faculty-access/available-subjects?${params.toString()}`);
       if (res.ok) {
         const data = await res.json();
-        setAssignSubjectsList(data);
+        setAvailableSubjectsList(Array.isArray(data) ? data : []);
+      } else {
+        setAvailableSubjectsList([]);
       }
     } catch (err) {
-      console.error("Failed to fetch subjects for assignment", err);
+      console.error("Failed to fetch available student subjects", err);
+      setAvailableSubjectsList([]);
+    } finally {
+      setLoadingAvailableSubjects(false);
+    }
+  };
+
+  // Fetch regulations and academic years for filter options
+  const fetchFilterOptions = async () => {
+    try {
+      const [regRes, ayRes] = await Promise.all([
+        fetch(`${API_BASE}/api/academic/regulations`),
+        fetch(`${API_BASE}/api/academic/academic-years`),
+      ]);
+      if (regRes.ok) {
+        const regs = await regRes.json();
+        if (Array.isArray(regs) && regs.length > 0) {
+          setRegulationsList(regs.map((r) => r.code || r));
+        }
+      }
+      if (ayRes.ok) {
+        const ays = await ayRes.json();
+        if (Array.isArray(ays) && ays.length > 0) {
+          setAcademicYearsList(ays.map((y) => y.year || y));
+        }
+      }
+    } catch (e) {
+      console.error("Error fetching filter options", e);
     }
   };
 
@@ -212,26 +258,17 @@ export default function AcademicManagement() {
   useEffect(() => {
     if (subTab === "subjects") fetchSubjects();
     if (subTab === "faculty_access") {
-      fetchSubjectsForAssignment("ALL"); // load all initially
       fetchFaculties();
-      setAssignSubjectFilterDept("ALL");  // reset filter on tab switch
-      setAssignSubjectSearchText("");
+      fetchFilterOptions();
+      fetchAvailableSubjects();
     }
-    if (subTab === "assessment_config") fetchAssessmentConfig();
   }, [subTab, subjectFilterDept, subjectFilterType, subjectFilterRegulation]);
 
-  // Re-fetch from backend whenever dept filter changes in Assign Subjects panel
+  // Re-fetch available subjects whenever filters change
   useEffect(() => {
     if (subTab !== "faculty_access") return;
-    const dept = assignSubjectFilterDept;
-    const params = new URLSearchParams();
-    if (dept && dept !== "ALL") params.append("department", dept);
-    fetch(`${API_BASE}/api/academic/subjects?${params.toString()}`)
-      .then((r) => r.ok ? r.json() : [])
-      .then((data) => setAssignSubjectsList(Array.isArray(data) ? data : []))
-      .catch(() => setAssignSubjectsList([]));
-    setAssignSubjectSearchText(""); // clear search when dept changes
-  }, [subTab, assignSubjectFilterDept]);
+    fetchAvailableSubjects();
+  }, [subTab, availSubjectDept, availSubjectReg, availSubjectSem, availSubjectYear, availSubjectSearch]);
 
   const handleSaveSubject = async (e) => {
     e.preventDefault();
@@ -286,30 +323,66 @@ export default function AcademicManagement() {
     }
   };
 
+  // Helper to generate a unique key for duplicate prevention
+  const getAssignmentKey = (a) =>
+    `${(a.subjectCode || "").toUpperCase()}_${(a.studentDepartment || a.department || "ALL").toUpperCase()}_${a.semester || 1}_${(a.regulation || "2021").toUpperCase()}_${(a.academicYear || "2025-2026").toUpperCase()}`;
+
   // Select Faculty Access
   const handleSelectFaculty = async (fac) => {
     setSelectedFaculty(fac);
+    setSelectedToAssignKeys([]);
     try {
       const res = await fetch(`${API_BASE}/api/academic/faculty-access/${fac.registerNumber}`);
       if (res.ok) {
         const data = await res.json();
-        setAssignedSubjects(data.subjectCodes || []);
+        setAssignedAssignments(data.assignments || []);
       }
     } catch (err) {
-      setAssignedSubjects([]);
+      setAssignedAssignments([]);
     }
   };
 
-  const toggleSubjectAssignment = (code) => {
-    setAssignedSubjects((prev) =>
-      prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code]
+  const toggleSelectToAssign = (sub) => {
+    const key = getAssignmentKey(sub);
+    setSelectedToAssignKeys((prev) =>
+      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]
     );
   };
 
-  const handleSaveFacultyAccess = async () => {
+  const handleAssignSelected = async () => {
     if (!selectedFaculty) return;
+    if (selectedToAssignKeys.length === 0) {
+      alert("Please select at least one subject from the available list to assign.");
+      return;
+    }
+
     setSavingAccess(true);
     try {
+      const newAssignmentsToAdd = availableSubjectsList
+        .filter((sub) => selectedToAssignKeys.includes(getAssignmentKey(sub)))
+        .map((sub) => ({
+          facultyId: selectedFaculty.registerNumber,
+          subjectId: sub.subjectId || sub.id,
+          subjectCode: sub.subjectCode,
+          subjectName: sub.subjectName,
+          studentDepartment: sub.studentDepartment || sub.department || "ALL",
+          regulation: sub.regulation || "2021",
+          semester: sub.semester || 1,
+          academicYear: sub.academicYear || "2025-2026",
+          status: "ACTIVE",
+        }));
+
+      // Merge and prevent duplicates
+      const seenKeys = new Set(assignedAssignments.map(getAssignmentKey));
+      const combined = [...assignedAssignments];
+      for (const item of newAssignmentsToAdd) {
+        const k = getAssignmentKey(item);
+        if (!seenKeys.has(k)) {
+          seenKeys.add(k);
+          combined.push(item);
+        }
+      }
+
       const res = await fetch(`${API_BASE}/api/academic/faculty-access`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -317,56 +390,55 @@ export default function AcademicManagement() {
           facultyId: selectedFaculty.registerNumber,
           facultyName: selectedFaculty.name,
           department: selectedFaculty.department || "CSE",
-          subjectCodes: assignedSubjects,
+          subjectCodes: Array.from(new Set(combined.map((c) => c.subjectCode))),
+          assignments: combined,
         }),
       });
+
       if (res.ok) {
-        alert(`Subject access saved for ${selectedFaculty.name}!`);
+        const data = await res.json();
+        setAssignedAssignments(data.facultyAccess?.assignments || combined);
+        setSelectedToAssignKeys([]);
+        alert(`Subject assignments saved for ${selectedFaculty.name}!`);
       } else {
-        alert("Failed to save faculty access");
+        const err = await res.json();
+        alert(err.detail || "Failed to save faculty access.");
       }
     } catch (err) {
-      alert("Error saving access");
+      alert("Error saving faculty access.");
     }
     setSavingAccess(false);
   };
 
-  // Assessment Config
-  const fetchAssessmentConfig = async () => {
+  const handleRemoveAssignment = async (assignment) => {
+    if (!selectedFaculty) return;
+    const confirmMsg = `Remove assignment of ${assignment.subjectCode} (${assignment.studentDepartment}, Sem ${assignment.semester}) from ${selectedFaculty.name}?`;
+    if (!window.confirm(confirmMsg)) return;
+
     try {
+      const params = new URLSearchParams({
+        subjectCode: assignment.subjectCode,
+        studentDepartment: assignment.studentDepartment || "ALL",
+        semester: assignment.semester || 1,
+        academicYear: assignment.academicYear || "2025-2026",
+        regulation: assignment.regulation || "2021",
+      });
+
       const res = await fetch(
-        `${API_BASE}/api/academic/assessment-config?department=${configDept}&semester=${configSem}`
+        `${API_BASE}/api/academic/faculty-access/${selectedFaculty.registerNumber}/assignment?${params.toString()}`,
+        { method: "DELETE" }
       );
+
       if (res.ok) {
         const data = await res.json();
-        if (data.components) setConfigComponents(data.components);
+        setAssignedAssignments(data.assignments || []);
+      } else {
+        const err = await res.json();
+        alert(err.detail || "Failed to remove assignment.");
       }
     } catch (err) {
-      console.error(err);
+      alert("Error removing assignment.");
     }
-  };
-
-  useEffect(() => {
-    if (subTab === "assessment_config") fetchAssessmentConfig();
-  }, [configDept, configSem]);
-
-  const handleSaveConfig = async () => {
-    setSavingConfig(true);
-    try {
-      const res = await fetch(`${API_BASE}/api/academic/assessment-config`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          department: configDept,
-          semester: configSem,
-          components: configComponents,
-        }),
-      });
-      if (res.ok) alert("Assessment scheme saved successfully!");
-    } catch (err) {
-      alert("Error saving assessment scheme");
-    }
-    setSavingConfig(false);
   };
 
   return (
@@ -390,15 +462,6 @@ export default function AcademicManagement() {
         >
           🔑 Faculty Subject Access
         </button>
-
-        <button
-          onClick={() => setSubTab("assessment_config")}
-          className={`px-4 py-2 rounded-xl text-sm font-bold transition-all ${
-            subTab === "assessment_config" ? "bg-indigo-600 text-white shadow" : "bg-white text-gray-700 hover:bg-gray-100 border border-gray-200"
-          }`}
-        >
-          ⚙️ Assessment & Unit Config
-        </button>
       </div>
 
       {/* ─────────────────────────────────────────────────────────────────── */}
@@ -408,11 +471,42 @@ export default function AcademicManagement() {
         <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-200 space-y-6">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
-              <h2 className="text-xl font-bold text-gray-900">Subject Master Database</h2>
+              <div className="flex items-center gap-2">
+                <h2 className="text-xl font-bold text-gray-900">Subject Master Database</h2>
+                {subjectSearchQuery.trim() && (
+                  <span className="px-2.5 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-full text-[11px] font-bold">
+                    {filteredSubjects.length} of {subjects.length}
+                  </span>
+                )}
+              </div>
               <p className="text-xs text-gray-500">Manage subject codes, titles, credits, and paper types for GPA/CGPA calculations.</p>
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
+              {/* Search Bar for Subject Code and Name */}
+              <div className="relative min-w-[210px] sm:min-w-[250px]">
+                <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-gray-400 text-xs">
+                  🔍
+                </span>
+                <input
+                  type="text"
+                  placeholder="Search code or name..."
+                  value={subjectSearchQuery}
+                  onChange={(e) => setSubjectSearchQuery(e.target.value)}
+                  className="w-full pl-8 pr-7 py-2 bg-gray-50 border border-gray-300 rounded-xl text-xs font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all placeholder:text-gray-400"
+                />
+                {subjectSearchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSubjectSearchQuery("")}
+                    className="absolute inset-y-0 right-0 pr-2.5 flex items-center text-gray-400 hover:text-gray-600 text-xs font-bold"
+                    title="Clear search"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+
               <select
                 value={subjectFilterDept}
                 onChange={(e) => setSubjectFilterDept(e.target.value)}
@@ -483,10 +577,10 @@ export default function AcademicManagement() {
                   <th className="py-3 px-3 text-center w-10">
                     <input
                       type="checkbox"
-                      checked={subjects.length > 0 && selectedSubjectKeys.length === subjects.length}
+                      checked={filteredSubjects.length > 0 && filteredSubjects.every((sub) => selectedSubjectKeys.includes(getSubKey(sub)))}
                       onChange={toggleSelectAll}
                       className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500 cursor-pointer"
-                      title="Select / Deselect All"
+                      title="Select / Deselect All Visible"
                     />
                   </th>
                   <th className="py-3 px-4">Subject Code</th>
@@ -499,37 +593,64 @@ export default function AcademicManagement() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {subjects.map((sub, idx) => {
-                  const key = getSubKey(sub);
-                  const isChecked = selectedSubjectKeys.includes(key);
-                  return (
-                    <tr key={idx} className={`hover:bg-slate-50 transition-colors ${isChecked ? "bg-indigo-50/40" : ""}`}>
-                      <td className="py-3 px-3 text-center">
-                        <input
-                          type="checkbox"
-                          checked={isChecked}
-                          onChange={() => toggleSelectSubject(sub)}
-                          className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500 cursor-pointer"
-                        />
-                      </td>
-                      <td className="py-3 px-4 font-mono font-bold text-indigo-700">{sub.subjectCode}</td>
-                      <td className="py-3 px-4 font-medium text-gray-900">{sub.subjectName}</td>
-                      <td className="py-3 px-4 text-center font-semibold text-gray-700">{sub.department}</td>
-                      <td className="py-3 px-4 text-center font-black text-amber-600 bg-amber-50/50 rounded">{sub.credits}</td>
-                      <td className="py-3 px-4 text-center font-bold text-slate-600">{sub.paperType || "THEORY"}</td>
-                      <td className="py-3 px-4 text-center font-bold text-indigo-600 bg-indigo-50 px-2 py-1 rounded-lg">{sub.regulation || "2021"}</td>
-                      <td className="py-3 px-4 text-center">
-                        <button
-                          onClick={() => handleDeleteSingleSubject(sub)}
-                          className="p-1.5 text-gray-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
-                          title={`Delete ${sub.subjectCode}`}
-                        >
-                          🗑️
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
+                {filteredSubjects.length === 0 ? (
+                  <tr>
+                    <td colSpan="8" className="py-12 text-center text-gray-500 text-xs">
+                      {subjectSearchQuery.trim() ? (
+                        <div className="flex flex-col items-center justify-center gap-1.5 py-2">
+                          <span className="text-2xl">🔍</span>
+                          <span className="font-bold text-gray-700 text-sm">No subjects matching "{subjectSearchQuery}"</span>
+                          <span className="text-gray-400 text-xs">
+                            Check the subject code or name, or adjust your department/regulation filters.
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setSubjectSearchQuery("")}
+                            className="mt-2 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 font-bold rounded-xl text-xs transition-colors"
+                          >
+                            Clear Search
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col items-center justify-center gap-1 py-4 text-gray-400 text-xs">
+                          <span>No subjects found for the selected filters.</span>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ) : (
+                  filteredSubjects.map((sub, idx) => {
+                    const key = getSubKey(sub);
+                    const isChecked = selectedSubjectKeys.includes(key);
+                    return (
+                      <tr key={idx} className={`hover:bg-slate-50 transition-colors ${isChecked ? "bg-indigo-50/40" : ""}`}>
+                        <td className="py-3 px-3 text-center">
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => toggleSelectSubject(sub)}
+                            className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500 cursor-pointer"
+                          />
+                        </td>
+                        <td className="py-3 px-4 font-mono font-bold text-indigo-700">{sub.subjectCode}</td>
+                        <td className="py-3 px-4 font-medium text-gray-900">{sub.subjectName}</td>
+                        <td className="py-3 px-4 text-center font-semibold text-gray-700">{sub.department || sub.dept || "ALL"}</td>
+                        <td className="py-3 px-4 text-center font-black text-amber-600 bg-amber-50/50 rounded">{sub.credits}</td>
+                        <td className="py-3 px-4 text-center font-bold text-slate-600">{sub.paperType || "THEORY"}</td>
+                        <td className="py-3 px-4 text-center font-bold text-indigo-600 bg-indigo-50 px-2 py-1 rounded-lg">{sub.regulation || "2021"}</td>
+                        <td className="py-3 px-4 text-center">
+                          <button
+                            onClick={() => handleDeleteSingleSubject(sub)}
+                            className="p-1.5 text-gray-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                            title={`Delete ${sub.subjectCode}`}
+                          >
+                            🗑️
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>
@@ -836,80 +957,289 @@ export default function AcademicManagement() {
           <div className="md:col-span-2 bg-white rounded-2xl p-5 shadow-sm border border-gray-200 space-y-4">
             {selectedFaculty ? (
               <>
+                {/* Header */}
                 <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-gray-100">
                   <div>
-                    <h3 className="text-base font-bold text-gray-900">Assign Subjects to {selectedFaculty.name}</h3>
-                    <p className="text-xs text-gray-500 font-mono">ID: {selectedFaculty.registerNumber} • Dept: {selectedFaculty.department}</p>
+                    <h3 className="text-base font-bold text-gray-900">
+                      Assign Subjects to {selectedFaculty.name}
+                    </h3>
+                    <p className="text-xs text-gray-500 font-mono">
+                      Faculty ID: <span className="font-bold text-gray-700">{selectedFaculty.registerNumber}</span> • Faculty Dept: <span className="font-bold text-indigo-700">{selectedFaculty.department || "N/A"}</span>
+                    </p>
                   </div>
 
-                  {/* Option 2: Assigning Subjects Filter (Dept, Sub Code/Name input) */}
-                  <div className="flex flex-wrap items-center gap-2">
-                    <select
-                      value={assignSubjectFilterDept}
-                      onChange={(e) => setAssignSubjectFilterDept(e.target.value)}
-                      className="px-2.5 py-1.5 bg-gray-50 border border-gray-300 rounded-xl text-xs font-bold text-gray-700"
-                    >
-                      <option value="ALL">All Depts</option>
-                      {DEPARTMENTS.map((d) => (
-                        <option key={d} value={d}>{d}</option>
-                      ))}
-                    </select>
-
-                    <input
-                      type="text"
-                      placeholder="Sub Code / Name..."
-                      value={assignSubjectSearchText}
-                      onChange={(e) => setAssignSubjectSearchText(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === "Escape") setAssignSubjectSearchText(""); }}
-                      className="px-2.5 py-1.5 bg-gray-50 border border-gray-300 rounded-xl text-xs font-medium w-40 focus:outline-none focus:border-indigo-500"
-                    />
-
+                  <div className="flex items-center gap-2">
                     <button
-                      type="button"
-                      onClick={() => setAssignSubjectSearchText(assignSubjectSearchText.trim())}
-                      className="px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs rounded-xl shadow transition-all flex items-center gap-1"
+                      onClick={handleAssignSelected}
+                      disabled={savingAccess || selectedToAssignKeys.length === 0}
+                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow transition-all flex items-center gap-1.5"
                     >
-                      🔍 Search
-                    </button>
-
-                    <button
-                      onClick={handleSaveFacultyAccess}
-                      disabled={savingAccess}
-                      className="px-4 py-1.5 bg-indigo-600 text-white font-bold text-xs rounded-xl shadow hover:bg-indigo-700 transition-all"
-                    >
-                      {savingAccess ? "Saving..." : "Save Access"}
+                      {savingAccess ? (
+                        "Saving..."
+                      ) : (
+                        <>➕ Assign Selected ({selectedToAssignKeys.length})</>
+                      )}
                     </button>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-80 overflow-y-auto p-1">
-                  {filteredAssignSubjects.map((sub) => {
-                    const isChecked = assignedSubjects.includes(sub.subjectCode);
-                    return (
-                      <label
-                        key={sub.subjectCode}
-                        className={`p-3 rounded-xl border cursor-pointer transition-all flex items-center gap-3 text-xs ${
-                          isChecked ? "bg-indigo-50/70 border-indigo-300 text-indigo-950 font-bold" : "bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100"
-                        }`}
+                {/* Filters for Available Student Subjects */}
+                <div className="bg-gray-50/70 p-3 rounded-xl border border-gray-200/80 space-y-2">
+                  <div className="text-[11px] font-bold text-gray-600 uppercase tracking-wider flex items-center justify-between">
+                    <span>Filter Available Student Subjects</span>
+                    {(availSubjectDept !== "ALL" || availSubjectReg !== "ALL" || availSubjectSem !== "ALL" || availSubjectYear !== "ALL" || availSubjectSearch) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAvailSubjectDept("ALL");
+                          setAvailSubjectReg("ALL");
+                          setAvailSubjectSem("ALL");
+                          setAvailSubjectYear("ALL");
+                          setAvailSubjectSearch("");
+                        }}
+                        className="text-[10px] text-indigo-600 hover:underline font-semibold"
                       >
-                        <input
-                          type="checkbox"
-                          checked={isChecked}
-                          onChange={() => toggleSubjectAssignment(sub.subjectCode)}
-                          className="w-4 h-4 text-indigo-600 rounded"
-                        />
-                        <div>
-                          <div className="font-mono font-bold text-indigo-700">{sub.subjectCode}</div>
-                          <div className="text-[11px] font-medium text-gray-800 line-clamp-1">{sub.subjectName}</div>
-                          <div className="text-[10px] text-gray-400">{sub.department}</div>
-                        </div>
-                      </label>
-                    );
-                  })}
+                        Reset Filters
+                      </button>
+                    )}
+                  </div>
 
-                  {filteredAssignSubjects.length === 0 && (
-                    <div className="col-span-2 p-8 text-center text-gray-400 text-xs font-medium">
-                      No subjects found matching filter criteria.
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 text-xs">
+                    {/* Student Department Filter */}
+                    <div>
+                      <label className="text-[10px] font-bold text-gray-500 block mb-0.5">Student Dept</label>
+                      <select
+                        value={availSubjectDept}
+                        onChange={(e) => setAvailSubjectDept(e.target.value)}
+                        className="w-full px-2 py-1.5 bg-white border border-gray-300 rounded-lg text-xs font-bold text-gray-700"
+                      >
+                        <option value="ALL">All Depts</option>
+                        {DEPARTMENTS.map((d) => (
+                          <option key={d} value={d}>{d}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Regulation Filter */}
+                    <div>
+                      <label className="text-[10px] font-bold text-gray-500 block mb-0.5">Regulation</label>
+                      <select
+                        value={availSubjectReg}
+                        onChange={(e) => setAvailSubjectReg(e.target.value)}
+                        className="w-full px-2 py-1.5 bg-white border border-gray-300 rounded-lg text-xs font-bold text-gray-700"
+                      >
+                        <option value="ALL">All Regulations</option>
+                        {regulationsList.map((r) => (
+                          <option key={r} value={r}>Reg {r}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Semester Filter */}
+                    <div>
+                      <label className="text-[10px] font-bold text-gray-500 block mb-0.5">Semester</label>
+                      <select
+                        value={availSubjectSem}
+                        onChange={(e) => setAvailSubjectSem(e.target.value)}
+                        className="w-full px-2 py-1.5 bg-white border border-gray-300 rounded-lg text-xs font-bold text-gray-700"
+                      >
+                        <option value="ALL">All Semesters</option>
+                        {[1, 2, 3, 4, 5, 6, 7, 8].map((s) => (
+                          <option key={s} value={s}>Sem {s}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Academic Year Filter */}
+                    <div>
+                      <label className="text-[10px] font-bold text-gray-500 block mb-0.5">Academic Year</label>
+                      <select
+                        value={availSubjectYear}
+                        onChange={(e) => setAvailSubjectYear(e.target.value)}
+                        className="w-full px-2 py-1.5 bg-white border border-gray-300 rounded-lg text-xs font-bold text-gray-700"
+                      >
+                        <option value="ALL">All AYs</option>
+                        {academicYearsList.map((y) => (
+                          <option key={y} value={y}>{y}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Search Code / Name */}
+                    <div className="col-span-2 sm:col-span-1">
+                      <label className="text-[10px] font-bold text-gray-500 block mb-0.5">Search</label>
+                      <input
+                        type="text"
+                        placeholder="Code or Name..."
+                        value={availSubjectSearch}
+                        onChange={(e) => setAvailSubjectSearch(e.target.value)}
+                        className="w-full px-2 py-1.5 bg-white border border-gray-300 rounded-lg text-xs font-medium focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Section A: Already Assigned Subjects */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-bold text-gray-800 uppercase tracking-wider flex items-center gap-1.5">
+                      <span>Assigned Subjects</span>
+                      <span className="px-2 py-0.5 bg-indigo-100 text-indigo-800 rounded-full text-[10px] font-bold">
+                        {assignedAssignments.length}
+                      </span>
+                    </h4>
+                  </div>
+
+                  {assignedAssignments.length === 0 ? (
+                    <div className="p-3 bg-gray-50 rounded-xl text-gray-400 text-xs italic border border-dashed border-gray-200 text-center">
+                      No subjects currently assigned to this faculty member.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto p-0.5">
+                      {assignedAssignments.map((a, idx) => (
+                        <div
+                          key={`${a.subjectCode}_${a.studentDepartment}_${a.semester}_${a.academicYear}_${idx}`}
+                          className="p-2.5 bg-slate-50 border border-slate-200/90 rounded-xl flex items-center justify-between gap-2 text-xs shadow-sm"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-mono font-bold text-indigo-700">{a.subjectCode}</span>
+                              <span className="text-gray-800 font-semibold truncate text-[11px]">
+                                {a.subjectName || a.subjectCode}
+                              </span>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-1 mt-1">
+                              <span className="px-1.5 py-0.5 bg-blue-100 text-blue-800 rounded text-[9px] font-bold">
+                                Dept: {a.studentDepartment || "ALL"}
+                              </span>
+                              <span className="px-1.5 py-0.5 bg-gray-200 text-gray-700 rounded text-[9px] font-medium">
+                                Sem {a.semester || 1} • Reg {a.regulation || "2021"}
+                              </span>
+                              <span className="px-1.5 py-0.5 bg-purple-100 text-purple-800 rounded text-[9px] font-medium">
+                                {a.academicYear || "2025-2026"}
+                              </span>
+                              <span className="px-1.5 py-0.5 bg-emerald-100 text-emerald-800 rounded text-[9px] font-bold">
+                                {a.status || "ACTIVE"}
+                              </span>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveAssignment(a)}
+                            title="Unassign this subject"
+                            className="px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-lg text-[10px] font-bold transition flex items-center gap-0.5 shrink-0 border border-rose-200"
+                          >
+                            🗑️ Remove
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Section B: Available Student Subjects List */}
+                <div className="space-y-2 pt-2 border-t border-gray-100">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="text-xs font-bold text-gray-800 uppercase tracking-wider flex items-center gap-1.5">
+                        <span>Available Student Subjects</span>
+                        <span className="px-2 py-0.5 bg-gray-100 text-gray-700 rounded-full text-[10px] font-bold">
+                          {availableSubjectsList.length}
+                        </span>
+                      </h4>
+                      <p className="text-[10px] text-gray-500">
+                        Select eligible subjects offered to students to assign to {selectedFaculty.name}.
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const unassignedKeys = availableSubjectsList
+                            .filter((sub) => !assignedAssignments.some((a) => getAssignmentKey(a) === getAssignmentKey(sub)))
+                            .map(getAssignmentKey);
+                          setSelectedToAssignKeys((prev) => Array.from(new Set([...prev, ...unassignedKeys])));
+                        }}
+                        className="text-[11px] text-indigo-600 hover:text-indigo-800 font-bold"
+                      >
+                        Select All
+                      </button>
+                      <span className="text-gray-300">|</span>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedToAssignKeys([])}
+                        className="text-[11px] text-gray-500 hover:text-gray-700 font-bold"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  </div>
+
+                  {loadingAvailableSubjects ? (
+                    <div className="p-8 text-center text-gray-400 text-xs font-medium">
+                      Loading student-available subjects...
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-72 overflow-y-auto p-1">
+                      {availableSubjectsList.map((sub) => {
+                        const subKey = getAssignmentKey(sub);
+                        const isAlreadyAssigned = assignedAssignments.some((a) => getAssignmentKey(a) === subKey);
+                        const isChecked = isAlreadyAssigned || selectedToAssignKeys.includes(subKey);
+
+                        return (
+                          <label
+                            key={subKey}
+                            className={`p-3 rounded-xl border transition-all flex items-start gap-3 text-xs ${
+                              isAlreadyAssigned
+                                ? "bg-emerald-50/60 border-emerald-300/80 text-emerald-950 opacity-90 cursor-default"
+                                : isChecked
+                                ? "bg-indigo-50/70 border-indigo-300 text-indigo-950 font-bold cursor-pointer"
+                                : "bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100 cursor-pointer"
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              disabled={isAlreadyAssigned}
+                              onChange={() => toggleSelectToAssign(sub)}
+                              className="w-4 h-4 text-indigo-600 rounded mt-0.5 cursor-pointer disabled:cursor-not-allowed"
+                            />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center justify-between gap-1">
+                                <span className="font-mono font-bold text-indigo-700">{sub.subjectCode}</span>
+                                {isAlreadyAssigned ? (
+                                  <span className="px-1.5 py-0.5 bg-emerald-100 text-emerald-800 rounded font-bold text-[9px]">
+                                    ✓ Assigned
+                                  </span>
+                                ) : (
+                                  <span className="px-1.5 py-0.5 bg-blue-100 text-blue-800 rounded font-bold text-[9px]">
+                                    {sub.studentDepartment}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-[11px] font-medium text-gray-800 line-clamp-1 mt-0.5">
+                                {sub.subjectName}
+                              </div>
+                              <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-gray-400 mt-1">
+                                <span>Dept: <strong className="text-gray-600">{sub.studentDepartment}</strong></span>
+                                <span>•</span>
+                                <span>Sem {sub.semester}</span>
+                                <span>•</span>
+                                <span>Reg {sub.regulation}</span>
+                                <span>•</span>
+                                <span>{sub.academicYear}</span>
+                              </div>
+                            </div>
+                          </label>
+                        );
+                      })}
+
+                      {availableSubjectsList.length === 0 && (
+                        <div className="col-span-2 p-8 text-center text-gray-400 text-xs font-medium">
+                          No student-available subjects found matching filter criteria.
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -923,100 +1253,6 @@ export default function AcademicManagement() {
         </div>
       )}
 
-      {/* ─────────────────────────────────────────────────────────────────── */}
-      {/* SUBTAB 3: ASSESSMENT CONFIG */}
-      {/* ─────────────────────────────────────────────────────────────────── */}
-      {subTab === "assessment_config" && (
-        <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-200 space-y-6 max-w-3xl">
-          <div className="flex items-center justify-between pb-4 border-b border-gray-100">
-            <div>
-              <h2 className="text-xl font-bold text-gray-900">Configure Assessment Scheme & Max Marks</h2>
-              <p className="text-xs text-gray-500 mt-0.5">Define unit tests, assignments, and practical components per department and semester.</p>
-            </div>
-            <button
-              onClick={handleSaveConfig}
-              disabled={savingConfig}
-              className="px-6 py-2.5 bg-emerald-600 text-white font-bold text-xs rounded-xl shadow hover:bg-emerald-700"
-            >
-              {savingConfig ? "Saving..." : "Save Config"}
-            </button>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4 text-xs">
-            <div>
-              <label className="font-bold text-gray-700">Department</label>
-              <select
-                value={configDept}
-                onChange={(e) => setConfigDept(e.target.value)}
-                className="w-full px-3 py-2 border rounded-xl mt-1 font-bold"
-              >
-                <option value="ALL">ALL DEPARTMENTS</option>
-                {DEPARTMENTS.map((d) => (
-                  <option key={d} value={d}>{d}</option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="font-bold text-gray-700">Semester</label>
-              <select
-                value={configSem}
-                onChange={(e) => setConfigSem(Number(e.target.value))}
-                className="w-full px-3 py-2 border rounded-xl mt-1 font-bold"
-              >
-                {[1, 2, 3, 4, 5, 6, 7, 8].map((s) => (
-                  <option key={s} value={s}>Semester {s}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div className="space-y-3 pt-2">
-            <h4 className="font-bold text-sm text-gray-800">Components List</h4>
-            {configComponents.map((comp, idx) => (
-              <div key={idx} className="flex items-center gap-3 bg-gray-50 p-3 rounded-xl border border-gray-200">
-                <input
-                  type="text"
-                  value={comp.name}
-                  onChange={(e) => {
-                    const copy = [...configComponents];
-                    copy[idx].name = e.target.value;
-                    setConfigComponents(copy);
-                  }}
-                  className="flex-1 px-3 py-1.5 border rounded-lg text-xs font-bold"
-                  placeholder="Component Name (e.g. UT1)"
-                />
-                <div className="flex items-center gap-1">
-                  <span className="text-xs text-gray-500 font-medium">Max Mark:</span>
-                  <input
-                    type="number"
-                    value={comp.maxMarks}
-                    onChange={(e) => {
-                      const copy = [...configComponents];
-                      copy[idx].maxMarks = Number(e.target.value);
-                      setConfigComponents(copy);
-                    }}
-                    className="w-20 px-2 py-1.5 border rounded-lg text-xs font-bold text-center"
-                  />
-                </div>
-                <button
-                  onClick={() => setConfigComponents(configComponents.filter((_, i) => i !== idx))}
-                  className="text-red-500 hover:text-red-700 text-sm font-bold px-2"
-                >
-                  ✕
-                </button>
-              </div>
-            ))}
-
-            <button
-              onClick={() => setConfigComponents([...configComponents, { name: "New Component", maxMarks: 20 }])}
-              className="px-4 py-2 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-xl text-xs font-bold hover:bg-indigo-100"
-            >
-              + Add Component
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

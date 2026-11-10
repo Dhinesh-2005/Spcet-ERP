@@ -1,18 +1,49 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, HTTPException, UploadFile, File, Header
 from fastapi.responses import Response
 from app.database import db, clean_doc, clean_docs
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from app.services.academic_service import academic_service
+from app.services.arrear_service import arrear_service
+from app.services.security_service import security_service
 
 router = APIRouter()
 
 @router.get("/{reg_no}/profile")
-async def get_profile(reg_no: str):
+async def get_profile(
+    reg_no: str,
+    x_user_role: Optional[str] = Header(None),
+    x_user_id: Optional[str] = Header(None)
+):
+    await security_service.verify_student_access(reg_no, x_user_role, x_user_id)
     student = await db.students.find_one({"registerNumber": reg_no})
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
     results = [doc async for doc in db.results.find({"registerNumber": reg_no, "isPublished": True})]
-    return {"student": clean_doc(student), "results": clean_docs(results)}
+
+    # Enrich missing credits / subjectNames from db.subjects
+    sub_docs = {s["subjectCode"]: s async for s in db.subjects.find({})}
+    for r in results:
+        code = r.get("subjectCode")
+        if code in sub_docs:
+            if not r.get("credits") and sub_docs[code].get("credits"):
+                r["credits"] = float(sub_docs[code]["credits"])
+            if not r.get("subjectName") and sub_docs[code].get("subjectName"):
+                r["subjectName"] = sub_docs[code]["subjectName"]
+
+    # Also calculate academic history (CGPA & GPA per semester)
+    academic_data = {}
+    try:
+        academic_data = await academic_service.get_student_academic_history(reg_no)
+    except Exception:
+        pass
+
+    return {
+        "student": clean_doc(student),
+        "results": clean_docs(results),
+        "overallCgpa": academic_data.get("overallCgpa", 0.0),
+        "totalEarnedCredits": academic_data.get("totalEarnedCredits", 0.0),
+        "academicSemesters": academic_data.get("semesters", [])
+    }
 
 
 @router.post("/{reg_no}/photo")
@@ -32,14 +63,15 @@ async def get_photo(reg_no: str):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# NEW ENDPOINT (additive only – does NOT modify any existing routes above)
 # GET /api/students/{reg_no}/subjects
-# Returns a merged list of:
-#   • Regular subjects (from db.subjects filtered by student's dept + semester)
-#   • Student-specific subjects (from db.student_subjects for this roll number)
 # ─────────────────────────────────────────────────────────────────────────────
 @router.get("/{reg_no}/subjects")
-async def get_student_subjects(reg_no: str):
+async def get_student_subjects(
+    reg_no: str,
+    x_user_role: Optional[str] = Header(None),
+    x_user_id: Optional[str] = Header(None)
+):
+    await security_service.verify_student_access(reg_no, x_user_role, x_user_id)
     reg_no = reg_no.strip().upper()
 
     # 1. Fetch student record to get dept + semester
@@ -101,10 +133,32 @@ async def get_student_subjects(reg_no: str):
 
 
 @router.get("/{reg_no}/academic-history")
-async def get_academic_history(reg_no: str):
+async def get_academic_history(
+    reg_no: str,
+    x_user_role: Optional[str] = Header(None),
+    x_user_id: Optional[str] = Header(None)
+):
+    await security_service.verify_student_access(reg_no, x_user_role, x_user_id)
     data = await academic_service.get_student_academic_history(reg_no)
     if not data:
         raise HTTPException(status_code=404, detail=f"Academic history for student {reg_no} not found.")
     return data
+
+@router.get("/{reg_no}/carry-forward")
+async def get_carry_forward_arrears(
+    reg_no: str,
+    x_user_role: Optional[str] = Header(None),
+    x_user_id: Optional[str] = Header(None)
+):
+    """
+    Returns segregated view of:
+    - CURRENT SUBJECTS (for current semester)
+    - ARREAR SUBJECTS (carry forward failed subjects with preserved original semester and dynamic 3-semester validity)
+    """
+    await security_service.verify_student_access(reg_no, x_user_role, x_user_id)
+    data = await arrear_service.get_student_carry_forward_view(reg_no)
+    return data
+
+
 
 

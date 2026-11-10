@@ -1,11 +1,12 @@
 import re
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Query
-from typing import List, Dict, Any, Optional
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Query, Request
+from typing import List, Dict, Any, Optional, Union
 from io import BytesIO
 from bson import ObjectId
 from app.database import db, clean_doc
 from app.models.schemas import SubjectModel, ExternalMarksModel, QuestionPaperModel, StudentSubjectModel, OtherSubjectUploadRow
 from app.services.result_service import result_service
+from app.services.calculation_engine import calculation_engine
 
 router = APIRouter()
 
@@ -413,21 +414,113 @@ async def get_logins():
     return users
 
 @router.post("/promote-students")
-async def promote_students(department: str, currentSemester: int):
-    students = [s async for s in db.students.find({"department": department, "semester": currentSemester})]
-    if not students:
-        raise HTTPException(status_code=400, detail={"error": f"No students found in {department} Semester {currentSemester}"})
+async def promote_students(
+    request: Request,
+    department: Optional[str] = Query(None),
+    currentSemester: Optional[Union[str, int]] = Query(None),
+    adminPassword: Optional[str] = Query(None)
+):
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    target_dept = (body.get("department") or department or "ALL").strip()
+    raw_sem = body.get("currentSemester", currentSemester)
+    password = (body.get("adminPassword") or adminPassword or "").strip()
+
+    # 1. Verify Admin Password
+    settings = await db.admin_settings.find_one({"key": "admin_password"})
+    expected_password = "admin"
+    if settings and settings.get("value"):
+        expected_password = str(settings.get("value")).strip()
+
+    if not password:
+        raise HTTPException(status_code=401, detail={"error": "Admin password is required to promote students."})
+    if password != expected_password:
+        raise HTTPException(status_code=401, detail={"error": "Invalid admin password. Promotion authorization denied."})
+
+    # 2. Determine target semesters
+    is_all_sem = False
+    target_sem_int = None
+    if raw_sem is None or str(raw_sem).strip().upper() in {"ALL", "", "0"}:
+        is_all_sem = True
+    else:
+        try:
+            target_sem_int = int(raw_sem)
+        except ValueError:
+            raise HTTPException(status_code=400, detail={"error": f"Invalid semester: '{raw_sem}'"})
+        if target_sem_int == 99:
+            raise HTTPException(status_code=400, detail={"error": "Graduated students (Semester 99) cannot be promoted."})
+        if target_sem_int < 1 or target_sem_int > 8:
+            raise HTTPException(status_code=400, detail={"error": f"Semester must be between 1 and 8 (received {target_sem_int})."})
+
+    # 3. Department filter
+    is_all_dept = target_dept.upper() in {"ALL", "*", ""}
+    base_query: Dict[str, Any] = {}
+    if not is_all_dept:
+        base_query["department"] = {"$regex": f"^{re.escape(target_dept)}$", "$options": "i"}
+
+    # 4. Promotion Execution (descending from 8 down to 1 so students are not promoted multiple times)
     promoted_count = 0
     graduated_count = 0
-    for student in students:
-        if student.get("semester", 0) < 8:
-            new_sem = student.get("semester", 0) + 1
-            await db.students.update_one({"registerNumber": student["registerNumber"]}, {"$set": {"semester": new_sem, "year": int((new_sem + 1) / 2)}})
-            promoted_count += 1
-        elif student.get("semester") == 8:
-            await db.students.update_one({"registerNumber": student["registerNumber"]}, {"$set": {"semester": 99, "year": 5}})
-            graduated_count += 1
-    return {"message": f"✅ Promoted {promoted_count} students. 🎓 Graduated {graduated_count} students!"}
+
+    semesters_order = [8, 7, 6, 5, 4, 3, 2, 1] if is_all_sem else [target_sem_int]
+
+    for s_num in semesters_order:
+        sem_query = {**base_query, "semester": {"$in": [s_num, str(s_num)]}}
+        students = [s async for s in db.students.find(sem_query)]
+        for student in students:
+            reg_no = student.get("registerNumber")
+            if not reg_no or str(reg_no).strip().lower() == "admin":
+                continue
+            if s_num == 8:
+                await db.students.update_one(
+                    {"registerNumber": reg_no},
+                    {"$set": {"semester": 99, "year": 5}}
+                )
+                graduated_count += 1
+            else:
+                new_sem = s_num + 1
+                new_yr = int((new_sem + 1) / 2)
+                await db.students.update_one(
+                    {"registerNumber": reg_no},
+                    {"$set": {"semester": new_sem, "year": new_yr}}
+                )
+                promoted_count += 1
+
+    total_affected = promoted_count + graduated_count
+    if total_affected == 0:
+        dept_str = "All Departments" if is_all_dept else f"department {target_dept}"
+        sem_str = "All Semesters" if is_all_sem else f"Semester {target_sem_int}"
+        raise HTTPException(status_code=400, detail={"error": f"No eligible students found in {dept_str} ({sem_str}) to promote."})
+
+    # Optional Audit log
+    try:
+        from app.services.audit_service import audit_service
+        await audit_service.log_event(
+            user="admin",
+            role="admin",
+            action="STUDENT_PROMOTION",
+            entity="STUDENT",
+            details={
+                "department": "ALL" if is_all_dept else target_dept,
+                "semester": "ALL" if is_all_sem else target_sem_int,
+                "promotedCount": promoted_count,
+                "graduatedCount": graduated_count
+            }
+        )
+    except Exception:
+        pass
+
+    dept_desc = "All Departments" if is_all_dept else target_dept
+    sem_desc = "All Semesters" if is_all_sem else f"Semester {target_sem_int}"
+    return {
+        "message": f"Successfully promoted {promoted_count} student(s) and graduated {graduated_count} student(s) across {dept_desc} ({sem_desc})!",
+        "promotedCount": promoted_count,
+        "graduatedCount": graduated_count
+    }
 
 @router.post("/internal-upload")
 async def upload_internal_file(file: UploadFile = File(...), subjectCode: str = Form(...), department: str = Form("CSE")):
@@ -634,6 +727,7 @@ async def get_all_subjects(
         s_name = str(master_doc.get("subjectName") or info.get("subjectName") or "").strip() if master_doc else str(info.get("subjectName") or "").strip()
         credits_val = float(master_doc.get("credits") or 0) if master_doc else 0.0
         paper_type = str(master_doc.get("paperType") or "THEORY").strip().upper() if master_doc else "THEORY"
+        final_dept = (dept if dept else (str(master_doc.get("department") or "").strip().upper() if master_doc else "")) or "ALL"
 
         # Apply name & regulation filters if provided
         if subjectName and not re.search(re.escape(subjectName.strip()), s_name, re.IGNORECASE):
@@ -642,10 +736,10 @@ async def get_all_subjects(
             continue
 
         results.append({
-            "_id": f"{code}_{dept}_{sem}",
+            "_id": f"{code}_{final_dept}_{sem}",
             "subjectCode": code,
             "subjectName": s_name,
-            "department": dept,
+            "department": final_dept,
             "semester": sem,
             "credits": credits_val,
             "paperType": paper_type,
@@ -659,22 +753,71 @@ async def get_all_subjects(
 
 @router.delete("/subjects/{subjectCode}")
 async def delete_subject(subjectCode: str, department: Optional[str] = Query(None), semester: Optional[int] = Query(None)):
-    """Unassign subject from particular department & semester (Setup Module). Preserves db.subjects."""
+    """Delete subject completely from db.student_subjects, db.subjects, and clean up faculty access."""
     code = subjectCode.strip().upper()
-    q = {"subjectCode": code}
-    if department and department.strip().upper() != "ALL":
-        q["department"] = department.strip().upper()
+    
+    # 1. Build student_subjects query matching semester and department flexibly
+    st_q: Dict[str, Any] = {"subjectCode": {"$regex": f"^{re.escape(code)}$", "$options": "i"}}
     if semester and int(semester) != 0:
-        q["subjectSemester"] = int(semester)
+        sem_int = int(semester)
+        sem_str = str(semester)
+        st_q["$or"] = [
+            {"subjectSemester": sem_int},
+            {"subjectSemester": sem_str},
+            {"semester": sem_int},
+            {"semester": sem_str}
+        ]
+    if department and department.strip().upper() != "ALL":
+        dept_str = department.strip().upper()
+        cond = [
+            {"department": {"$regex": f"^{re.escape(dept_str)}$", "$options": "i"}},
+            {"department": None},
+            {"department": {"$exists": False}}
+        ]
+        if "$or" in st_q:
+            st_q["$and"] = [{"$or": st_q.pop("$or")}, {"$or": cond}]
+        else:
+            st_q["$or"] = cond
 
-    result = await db.student_subjects.delete_many(q)
-    return {"message": f"Unassigned subject {code} for selected department/semester ({result.deleted_count} assignment(s) removed). Master record preserved."}
+    result_st = await db.student_subjects.delete_many(st_q)
+
+    # 2. Delete from db.subjects (Subject Master)
+    sub_q: Dict[str, Any] = {"subjectCode": {"$regex": f"^{re.escape(code)}$", "$options": "i"}}
+    if department and department.strip().upper() != "ALL":
+        sub_q["$or"] = [
+            {"department": {"$regex": f"^{re.escape(department.strip())}$", "$options": "i"}},
+            {"department": "ALL"},
+            {"department": None},
+            {"department": {"$exists": False}}
+        ]
+    if semester and int(semester) != 0:
+        sem_int = int(semester)
+        sem_str = str(semester)
+        sub_q["$or"] = (sub_q.get("$or") or []) + [
+            {"semester": sem_int},
+            {"semester": sem_str}
+        ]
+
+    result_sub = await db.subjects.delete_many(sub_q)
+
+    # 3. Clean up faculty assignments
+    await db.faculty_subject_access.update_many(
+        {"subjectCodes": code},
+        {"$pull": {"subjectCodes": code}}
+    )
+
+    total_deleted = result_st.deleted_count + result_sub.deleted_count
+    return {
+        "message": f"Successfully deleted subject {code} ({result_st.deleted_count} student assignment(s), {result_sub.deleted_count} master record(s) removed).",
+        "deletedCount": total_deleted
+    }
 
 @router.post("/subjects/setup-bulk-delete")
 async def setup_bulk_delete_subjects(payload: Dict[str, Any]):
-    """Bulk unassign subjects from db.student_subjects for Setup Module."""
+    """Bulk delete subjects completely from db.student_subjects, db.subjects, and faculty access."""
     items = payload.get("items", [])
-    total_deleted = 0
+    total_st = 0
+    total_sub = 0
 
     for item in items:
         code = str(item.get("subjectCode") or "").strip().upper()
@@ -684,16 +827,58 @@ async def setup_bulk_delete_subjects(payload: Dict[str, Any]):
         if not code:
             continue
 
-        q = {"subjectCode": code}
-        if dept and dept != "ALL":
-            q["department"] = dept
+        st_q: Dict[str, Any] = {"subjectCode": {"$regex": f"^{re.escape(code)}$", "$options": "i"}}
         if sem and int(sem) != 0:
-            q["subjectSemester"] = int(sem)
+            sem_int = int(sem)
+            sem_str = str(sem)
+            st_q["$or"] = [
+                {"subjectSemester": sem_int},
+                {"subjectSemester": sem_str},
+                {"semester": sem_int},
+                {"semester": sem_str}
+            ]
+        if dept and dept != "ALL":
+            cond = [
+                {"department": {"$regex": f"^{re.escape(dept)}$", "$options": "i"}},
+                {"department": None},
+                {"department": {"$exists": False}}
+            ]
+            if "$or" in st_q:
+                st_q["$and"] = [{"$or": st_q.pop("$or")}, {"$or": cond}]
+            else:
+                st_q["$or"] = cond
 
-        res = await db.student_subjects.delete_many(q)
-        total_deleted += res.deleted_count
+        res_st = await db.student_subjects.delete_many(st_q)
+        total_st += res_st.deleted_count
 
-    return {"message": f"Successfully unassigned {total_deleted} subject record(s). Master subjects preserved.", "deletedCount": total_deleted}
+        sub_q: Dict[str, Any] = {"subjectCode": {"$regex": f"^{re.escape(code)}$", "$options": "i"}}
+        if dept and dept != "ALL":
+            sub_q["$or"] = [
+                {"department": {"$regex": f"^{re.escape(dept)}$", "$options": "i"}},
+                {"department": "ALL"},
+                {"department": None},
+                {"department": {"$exists": False}}
+            ]
+        if sem and int(sem) != 0:
+            sem_int = int(sem)
+            sem_str = str(sem)
+            sub_q["$or"] = (sub_q.get("$or") or []) + [
+                {"semester": sem_int},
+                {"semester": sem_str}
+            ]
+
+        res_sub = await db.subjects.delete_many(sub_q)
+        total_sub += res_sub.deleted_count
+
+        await db.faculty_subject_access.update_many(
+            {"subjectCodes": code},
+            {"$pull": {"subjectCodes": code}}
+        )
+
+    return {
+        "message": f"Successfully deleted {total_st} student assignment(s) and {total_sub} master record(s).",
+        "deletedCount": total_st + total_sub
+    }
 
 @router.post("/external")
 async def upload_external_marks(marks: List[ExternalMarksModel]):
@@ -704,8 +889,9 @@ async def upload_external_marks(marks: List[ExternalMarksModel]):
     skipped_students = []
     skipped_subjects = []
 
-    # Cache validated register numbers to avoid repeated DB calls
+    # Cache validated register numbers and subjects to avoid repeated DB calls
     validated_regs: Dict[str, bool] = {}
+    cached_subjects: Dict[str, Any] = {}
 
     for mark in marks:
         reg = (mark.registerNumber or "").strip()
@@ -714,11 +900,21 @@ async def upload_external_marks(marks: List[ExternalMarksModel]):
         if not reg or not subj:
             continue
 
+        raw_mark = mark.externalMarks
+        if raw_mark is None:
+            continue
+
+        # Strict validation: External marks must be between 0 and 100
+        if raw_mark < 0 or raw_mark > 100:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid external mark ({raw_mark}) for student '{reg}', subject '{subj}'. External marks must be between 0 and 100."
+            )
+
         # Validate student exists in DB
         if reg not in validated_regs:
             student = await db.students.find_one({"registerNumber": reg})
             if not student:
-                # Try case-insensitive fallback
                 student = await db.students.find_one({"registerNumber": {"$regex": f"^{re.escape(reg)}$", "$options": "i"}})
             validated_regs[reg] = student is not None
 
@@ -728,19 +924,54 @@ async def upload_external_marks(marks: List[ExternalMarksModel]):
             continue
 
         # Validate subject exists in DB
-        subject = await db.subjects.find_one({"subjectCode": subj})
-        if not subject:
-            subject = await db.subjects.find_one({"subjectCode": {"$regex": f"^{re.escape(subj)}$", "$options": "i"}})
-        if not subject:
+        if subj not in cached_subjects:
+            subject = await db.subjects.find_one({"subjectCode": subj})
+            if not subject:
+                subject = await db.subjects.find_one({"subjectCode": {"$regex": f"^{re.escape(subj)}$", "$options": "i"}})
+            cached_subjects[subj] = subject
+
+        subject_doc = cached_subjects[subj]
+        if not subject_doc:
             if subj not in skipped_subjects:
                 skipped_subjects.append(subj)
             continue
 
+        raw_type = ((subject_doc.get("subjectType") or subject_doc.get("paperType") or "THEORY")).upper()
+        if "PRAC" in raw_type or "LAB" in raw_type:
+            st = "PRACTICAL"
+        elif "INTEG" in raw_type:
+            st = "INTEGRATED"
+        else:
+            st = "THEORY"
+
+        # Centralized conversion using CalculationEngine:
+        # Theory: /100 -> /60
+        # Practical: /100 -> /50
+        # Integrated: /100 -> /50
+        external_converted = calculation_engine.convert_external(raw_mark, subject_type=st)
+
         await db.externals.update_one(
             {"registerNumber": reg, "subjectCode": subj},
-            {"$set": {"registerNumber": reg, "subjectCode": subj, "externalMarks": mark.externalMarks}},
+            {"$set": {
+                "registerNumber": reg,
+                "subjectCode": subj,
+                "externalMarks": raw_mark,
+                "externalConverted": external_converted,
+                "subjectType": st
+            }},
             upsert=True,
         )
+
+        # Also sync to db.student_subjects for instantaneous consistency
+        await db.student_subjects.update_one(
+            {"registerNumber": reg, "subjectCode": subj},
+            {"$set": {
+                "externalMark": raw_mark,
+                "externalConverted": external_converted
+            }},
+            upsert=False
+        )
+
         uploaded += 1
 
     msg = f"✅ External marks uploaded: {uploaded} entries."
@@ -757,9 +988,15 @@ async def upload_external_marks(marks: List[ExternalMarksModel]):
     }
 
 @router.post("/calculate-results")
-async def calculate_results():
-    await result_service.calculate_results()
-    return {"message": "Results calculated! Check Preview."}
+async def calculate_results(
+    semester: Optional[str] = Query(None),
+    department: Optional[str] = Query(None),
+    payload: Optional[Dict[str, Any]] = None
+):
+    sem = semester or (payload.get("semester") if payload else None)
+    dept = department or (payload.get("department") if payload else None)
+    count = await result_service.calculate_results(semester=sem, department=dept)
+    return {"message": f"Results calculated for {count} entries! Check Preview.", "processedCount": count}
 
 @router.get("/preview")
 async def preview_results(semester: str, department: str):

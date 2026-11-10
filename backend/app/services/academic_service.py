@@ -16,6 +16,8 @@ GRADE_MAP = {
     "AB": {"gp": 0.0, "result": "FAIL"},  # Absent
 }
 
+from app.services.calculation_engine import calculation_engine, STATUS_PASS, STATUS_RA
+
 class AcademicService:
 
     @staticmethod
@@ -23,28 +25,15 @@ class AcademicService:
         g = str(grade_str or "").strip().upper()
         if g in GRADE_MAP:
             return GRADE_MAP[g]
-        # Fallback numeric logic if grade is given as letter or score
         return {"gp": 0.0, "result": "FAIL"}
 
     @staticmethod
-    def calculate_grade_from_total(total_marks: float, external_marks: float = 0.0, pass_mark: float = 45.0) -> Tuple[str, float, str]:
-        """Calculates Grade, Grade Point, and Result status."""
+    def calculate_grade_from_total(total_marks: float, external_marks: float = 0.0, pass_mark: float = 50.0) -> Tuple[str, float, str]:
+        """Calculates Grade, Grade Point, and Result status using centralized calculation engine."""
         rounded = int(round(total_marks))
-        # If external mark is provided, student must get min 45/100 in external to pass
-        if rounded >= 50 and (external_marks == 0.0 or external_marks >= 45.0):
-            if rounded >= 90:
-                return "O", 10.0, "PASS"
-            elif rounded >= 80:
-                return "A+", 9.0, "PASS"
-            elif rounded >= 70:
-                return "A", 8.0, "PASS"
-            elif rounded >= 60:
-                return "B+", 7.0, "PASS"
-            elif rounded >= 50:
-                return "B", 6.0, "PASS"
-            else:
-                return "C", 5.0, "PASS"
-        return "RA", 0.0, "FAIL"
+        is_pass = (rounded >= pass_mark) and (external_marks == 0.0 or external_marks >= 45.0)
+        grade, gp, status = calculation_engine.determine_grade(rounded, is_pass)
+        return grade, gp, status
 
     @staticmethod
     def calculate_gpa(subject_records: List[Dict[str, Any]]) -> float:
@@ -120,8 +109,8 @@ class AcademicService:
         records_cursor = db.student_subjects.find({"registerNumber": reg_no})
         raw_records = [clean_doc(doc) async for doc in records_cursor]
 
-        # Also merge with db.results if any historical records exist there
-        results_cursor = db.results.find({"registerNumber": reg_no})
+        # Also merge with db.results if any historical records exist there (published only)
+        results_cursor = db.results.find({"registerNumber": reg_no, "isPublished": True})
         raw_results = [clean_doc(doc) async for doc in results_cursor]
 
         # Group records by semester

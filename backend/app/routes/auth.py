@@ -1,6 +1,6 @@
 import os
 from fastapi import APIRouter, HTTPException
-from app.database import db
+from app.database import db, clean_docs
 from app.models.schemas import StudentModel, FacultyModel, HodModel
 from typing import Dict, Any
 
@@ -48,7 +48,7 @@ async def login(payload: Dict[str, Any]):
 @router.get("/results")
 async def get_all_results():
     results = [doc async for doc in db.results.find({})]
-    return {"results": results}
+    return {"results": clean_docs(results)}
 
 
 @router.post("/change-admin-password")
